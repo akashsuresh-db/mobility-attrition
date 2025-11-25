@@ -184,7 +184,35 @@ def get_agent_response(conversation_history):
         import traceback
         error_details = traceback.format_exc()
         print(f"Error calling agent: {error_details}")
-        return f"Error: {str(e)}"
+        
+        error_msg = str(e).lower()
+        
+        # Provide helpful error messages based on the error
+        if "invalid scope" in error_msg or "403" in error_msg or "forbidden" in error_msg:
+            return (
+                f"⚠️ Permission Error: Your account doesn't have access to the agent endpoint.\n\n"
+                f"To fix this:\n"
+                f"1. Go to your Databricks workspace\n"
+                f"2. Navigate to Serving Endpoints\n"
+                f"3. Find the endpoint: {MODEL_NAME}\n"
+                f"4. Grant 'Can Query' permission to your user or group\n\n"
+                f"Technical details: {str(e)}"
+            )
+        elif "404" in error_msg or "not found" in error_msg:
+            return (
+                f"⚠️ Endpoint Not Found: The agent endpoint '{MODEL_NAME}' was not found.\n\n"
+                f"Please verify:\n"
+                f"1. The model name is correct\n"
+                f"2. The endpoint exists in your workspace\n"
+                f"3. The endpoint URL is correct"
+            )
+        elif "401" in error_msg or "unauthorized" in error_msg:
+            return (
+                f"⚠️ Authentication Error: The authentication token is invalid or expired.\n\n"
+                f"Please check if your Databricks token is still valid."
+            )
+        else:
+            return f"Error: {str(e)}"
 
 
 def create_message_div(role, content):
