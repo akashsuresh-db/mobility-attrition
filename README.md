@@ -4,6 +4,8 @@ A simple Dash-based chatbot application that interfaces with a Databricks agent 
 
 ## Setup
 
+### Local Development
+
 1. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
@@ -16,13 +18,28 @@ A simple Dash-based chatbot application that interfaces with a Databricks agent 
 
    To get your Databricks token, follow: https://docs.databricks.com/en/dev-tools/auth/pat.html
 
-3. **Run the application:**
+3. **Test your authentication (optional but recommended):**
+   ```bash
+   python test_auth.py
+   ```
+
+   This will verify your token is valid and the endpoint is accessible.
+
+4. **Run the application:**
    ```bash
    python app.py
    ```
 
-4. **Open your browser:**
+5. **Open your browser:**
    Navigate to `http://localhost:8050`
+
+### Deploying to Databricks Apps
+
+The app uses **automatic on-behalf-of-user authentication** in Databricks Apps - no manual token configuration needed! 
+
+Simply deploy your app to Databricks Apps and it will automatically authenticate using each user's credentials via the `X-Forwarded-Access-Token` header.
+
+See [DATABRICKS_APPS_SETUP.md](DATABRICKS_APPS_SETUP.md) for detailed deployment instructions and troubleshooting.
 
 ## Features
 

@@ -3,20 +3,69 @@ from openai import OpenAI
 import dash
 from dash import dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
+from flask import request
 
 # Initialize the Dash app with a modern theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
-# Get Databricks token from environment
-DATABRICKS_TOKEN = os.environ.get('DATABRICKS_TOKEN')
-
-# Initialize OpenAI client
-client = OpenAI(
-    api_key=DATABRICKS_TOKEN,
-    base_url="https://adb-984752964297111.11.azuredatabricks.net/serving-endpoints"
-)
-
 MODEL_NAME = "agents_akash_s_demo-talent-mobility_attrition"
+BASE_URL = "https://adb-984752964297111.11.azuredatabricks.net/serving-endpoints"
+
+# Cache client for local development (when using env var)
+_cached_client = None
+
+
+def get_client():
+    """
+    Get or create OpenAI client with proper authentication.
+    
+    In Databricks Apps, this uses the X-Forwarded-Access-Token header
+    which contains the user's access token (on-behalf-of authentication).
+    
+    For local development, falls back to DATABRICKS_TOKEN environment variable.
+    """
+    global _cached_client
+    
+    token = None
+    use_cache = False
+    
+    # First, try to get token from Databricks Apps HTTP headers
+    # This header is automatically set by Databricks Apps with the user's token
+    try:
+        if request:
+            token = request.headers.get('X-Forwarded-Access-Token')
+            if token:
+                # Don't cache when using per-request tokens
+                use_cache = False
+    except RuntimeError:
+        # Not in a request context (e.g., during startup)
+        pass
+    
+    # Fall back to environment variable for local development
+    if not token:
+        token = os.environ.get('DATABRICKS_TOKEN')
+        use_cache = True  # Cache when using env var
+    
+    # If we're using cache and have a cached client, return it
+    if use_cache and _cached_client is not None:
+        return _cached_client
+    
+    if not token:
+        raise ValueError(
+            "Authentication not configured. For Databricks Apps, ensure the app has access to user tokens. "
+            "For local development, set DATABRICKS_TOKEN environment variable."
+        )
+    
+    client = OpenAI(
+        api_key=token,
+        base_url=BASE_URL
+    )
+    
+    # Cache if using env var
+    if use_cache:
+        _cached_client = client
+    
+    return client
 
 # App layout
 app.layout = dbc.Container([
@@ -91,6 +140,7 @@ app.layout = dbc.Container([
 def get_agent_response(conversation_history):
     """Get response from the Databricks agent endpoint"""
     try:
+        client = get_client()
         response = client.responses.create(
             model=MODEL_NAME,
             input=conversation_history
@@ -104,6 +154,9 @@ def get_agent_response(conversation_history):
         )
         
         return response_text
+    except ValueError as e:
+        # Authentication/configuration error
+        return f"Configuration Error: {str(e)}"
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -185,10 +238,35 @@ def update_chat(send_clicks, clear_clicks, n_submit, user_message, conversation_
 
 
 if __name__ == "__main__":
-    if not DATABRICKS_TOKEN:
-        print("Warning: DATABRICKS_TOKEN environment variable is not set!")
-        print("Please set it before running the app:")
-        print("export DATABRICKS_TOKEN='your_token_here'")
+    print("=" * 60)
+    print("Talent Mobility & Attrition Chatbot")
+    print("=" * 60)
+    
+    # Check authentication setup
+    has_env_token = bool(os.environ.get('DATABRICKS_TOKEN'))
+    
+    if has_env_token:
+        print("✓ DATABRICKS_TOKEN environment variable found")
+        print("  → Will use this token for local development")
+    else:
+        print("ℹ No DATABRICKS_TOKEN environment variable")
+        print("  → Will use X-Forwarded-Access-Token header (Databricks Apps)")
+    
+    print("\nAuthentication mode:")
+    if has_env_token:
+        print("  → Local development (using environment variable)")
+        try:
+            get_client()
+            print("  → ✓ Successfully authenticated")
+        except Exception as e:
+            print(f"  → ✗ Error: {e}")
+    else:
+        print("  → Databricks Apps (using on-behalf-of authentication)")
+        print("  → Token will be validated per-request")
+    
+    print("\n" + "=" * 60)
+    print(f"Starting server on http://0.0.0.0:8050")
+    print("=" * 60 + "\n")
     
     app.run_server(debug=True, host="0.0.0.0", port=8050)
 
