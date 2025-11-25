@@ -263,66 +263,98 @@ def parse_markdown_table(text):
     Extract markdown tables from text and convert them to pandas DataFrames.
     Returns a list of (table_df, start_pos, end_pos) tuples and the text without tables.
     """
-    # More flexible pattern to match markdown tables (including those with empty first column)
-    table_pattern = r'\|[^\n]*\|(?:\r?\n|\r)\|[-:\s|]+\|(?:\r?\n|\r)((?:\|[^\n]*\|(?:\r?\n|\r))+)'
-    
     tables = []
-    matches = list(re.finditer(table_pattern, text, re.MULTILINE))
+    
+    # Try multiple table patterns
+    patterns = [
+        # Standard markdown with pipes: | col1 | col2 |
+        r'\|[^\n]*\|(?:\r?\n|\r)\|[-:\s|]+\|(?:\r?\n|\r)((?:\|[^\n]*\|(?:\r?\n|\r))+)',
+        # Tab-separated or space-separated with header and separator
+        r'([^\n]+\t[^\n]+(?:\r?\n|\r)[-:\s\t]+(?:\r?\n|\r)(?:[^\n]+\t[^\n]+(?:\r?\n|\r))+)',
+    ]
+    
+    # Try pipe-delimited tables first
+    pipe_pattern = patterns[0]
+    matches = list(re.finditer(pipe_pattern, text, re.MULTILINE))
     
     for match in matches:
         table_text = match.group(0)
         try:
-            # Parse the markdown table
             lines = [line.strip() for line in table_text.strip().split('\n') if line.strip() and '|' in line]
-            if len(lines) < 2:  # Need at least separator and one data row
+            if len(lines) < 2:
                 continue
             
-            # Extract headers (first line)
-            header_line = lines[0]
-            headers = [h.strip() for h in header_line.split('|')]
-            headers = [h for h in headers if h]  # Remove empty strings
-            
-            # If first column is empty or just whitespace, use "Index" or row numbers
-            if not headers or headers[0] == '' or not headers[0].strip():
-                headers[0] = 'Index' if len(headers) > 0 else 'Column'
-            
-            # Skip separator line (line with dashes)
+            # Find separator line
             separator_idx = None
             for i, line in enumerate(lines):
-                if re.match(r'\|[\s\-:|]+\|', line):
+                if re.match(r'\|[\s\-:|]+\|', line) or re.match(r'[-:\s|]+', line):
                     separator_idx = i
                     break
             
-            if separator_idx is None:
+            if separator_idx is None or separator_idx == 0:
                 continue
             
-            # Extract data rows (after separator)
+            # Extract headers
+            header_line = lines[separator_idx - 1] if separator_idx > 0 else lines[0]
+            headers = [h.strip() for h in header_line.split('|')]
+            headers = [h for h in headers if h != '']
+            
+            if not headers:
+                continue
+            
+            # Extract data rows
             data = []
             for line in lines[separator_idx + 1:]:
                 cells = [cell.strip() for cell in line.split('|')]
-                cells = [c for c in cells if c or c == '0']  # Keep '0' but remove truly empty
-                if cells:
-                    # Pad or trim to match header length
+                cells = [c for c in cells if c != '' or c == '0']
+                if cells and len(cells) > 0:
+                    # Ensure we have the right number of columns
                     while len(cells) < len(headers):
                         cells.append('')
                     cells = cells[:len(headers)]
-                    data.append(cells)
+                    # Skip rows with all empty values
+                    if any(c for c in cells):
+                        data.append(cells)
             
-            if not data:
+            if data:
+                df = pd.DataFrame(data, columns=headers)
+                tables.append((df, match.start(), match.end()))
+                
+        except Exception as e:
+            print(f"Error parsing pipe table: {e}")
+            continue
+    
+    # Try tab-separated format: column1\tcolumn2\n---:---\nval1\tval2
+    tab_pattern = r'([^\n\|]+\t[^\n\|]+)\s*\n\s*([:-]+\s+[:-]+.*?)\s*\n((?:[^\n\|]+\t[^\n\|]+\s*\n?)+)'
+    tab_matches = list(re.finditer(tab_pattern, text, re.MULTILINE))
+    
+    for match in tab_matches:
+        try:
+            header_line = match.group(1).strip()
+            data_lines = match.group(3).strip().split('\n')
+            
+            headers = [h.strip() for h in header_line.split('\t') if h.strip()]
+            if not headers:
                 continue
             
-            # Create DataFrame
-            df = pd.DataFrame(data, columns=headers)
-            tables.append((df, match.start(), match.end()))
+            data = []
+            for line in data_lines:
+                if line.strip():
+                    cells = [c.strip() for c in line.split('\t')]
+                    if len(cells) == len(headers):
+                        data.append(cells)
+            
+            if data:
+                df = pd.DataFrame(data, columns=headers)
+                tables.append((df, match.start(), match.end()))
+                
         except Exception as e:
-            print(f"Error parsing table: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error parsing tab table: {e}")
             continue
     
     # Remove tables from text to get summary
     remaining_text = text
-    for _, start, end in reversed(tables):
+    for _, start, end in reversed(sorted(tables, key=lambda x: x[1])):
         remaining_text = remaining_text[:start] + remaining_text[end:]
     
     return tables, remaining_text.strip()
@@ -339,6 +371,10 @@ def format_response_content(content):
     # Remove agent name tags
     content_clean = re.sub(r'<name>.*?</name>', '', content).strip()
     
+    # Remove common unhelpful phrases
+    content_clean = re.sub(r'\bEMPTY\b', '', content_clean, flags=re.IGNORECASE)
+    content_clean = re.sub(r'\s+', ' ', content_clean).strip()  # Normalize whitespace
+    
     # Parse tables from the content
     tables, summary_text = parse_markdown_table(content_clean)
     
@@ -347,27 +383,46 @@ def format_response_content(content):
     # Add agent badge if we know which agent responded
     if agent_names:
         unique_agents = list(dict.fromkeys(agent_names))  # Remove duplicates, preserve order
-        if 'supervisor' not in [a.lower() for a in unique_agents]:
+        # Filter out supervisor and show only actual worker agents
+        worker_agents = [a for a in unique_agents if 'supervisor' not in a.lower()]
+        if worker_agents:
             badges = [
                 dbc.Badge(
                     agent.replace('_', ' ').title(),
                     color="info",
-                    className="me-2"
-                ) for agent in unique_agents
+                    className="me-2",
+                    style={"fontSize": "0.85em"}
+                ) for agent in worker_agents
             ]
             components.append(html.Div(badges, className="mb-2"))
     
-    # Add summary text if exists
+    # Add summary text if exists (and it's meaningful)
     if summary_text:
         # Split by newlines and create paragraphs
-        paragraphs = [p.strip() for p in summary_text.split('\n') if p.strip()]
+        paragraphs = [p.strip() for p in summary_text.split('\n') if p.strip() and len(p.strip()) > 3]
         if paragraphs:
             for para in paragraphs:
-                components.append(html.P(para, className="mb-2"))
+                # Skip if it looks like table remnants
+                if not re.match(r'^[-:\s|]+$', para) and '|' not in para[:10]:
+                    components.append(html.P(para, className="mb-2"))
     
     # Add tables
     if tables:
         for df, _, _ in tables:
+            # Skip tables with no meaningful data
+            if df.empty or len(df) == 0:
+                continue
+            
+            # Check if table has any non-empty values
+            has_data = False
+            for col in df.columns:
+                if df[col].notna().any() and (df[col] != '').any():
+                    has_data = True
+                    break
+            
+            if not has_data:
+                continue
+            
             # Create a styled table
             table_header = html.Thead(
                 html.Tr([
@@ -375,21 +430,30 @@ def format_response_content(content):
                         "padding": "10px",
                         "backgroundColor": "#007bff",
                         "color": "white",
-                        "fontWeight": "bold"
+                        "fontWeight": "bold",
+                        "textAlign": "left"
                     }) for col in df.columns
                 ], style={"backgroundColor": "#007bff"})
             )
             
             table_rows = []
             for idx, row in df.iterrows():
-                table_rows.append(
-                    html.Tr([
-                        html.Td(str(val), style={
+                # Create cells with better formatting
+                cells = []
+                for val in row:
+                    # Clean up cell value
+                    cell_val = str(val).strip()
+                    if cell_val in ['', 'nan', 'None']:
+                        cell_val = '—'  # Em dash for empty values
+                    
+                    cells.append(
+                        html.Td(cell_val, style={
                             "padding": "8px",
-                            "borderBottom": "1px solid #dee2e6"
-                        }) for val in row
-                    ])
-                )
+                            "borderBottom": "1px solid #dee2e6",
+                            "textAlign": "left"
+                        })
+                    )
+                table_rows.append(html.Tr(cells))
             
             table_body = html.Tbody(table_rows)
             
@@ -403,7 +467,9 @@ def format_response_content(content):
                 className="mt-3 mb-3",
                 style={
                     "backgroundColor": "white",
-                    "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
+                    "boxShadow": "0 2px 4px rgba(0,0,0,0.1)",
+                    "borderRadius": "4px",
+                    "overflow": "hidden"
                 }
             )
             components.append(table)
