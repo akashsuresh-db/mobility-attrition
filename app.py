@@ -22,45 +22,85 @@ BASE_URL = "https://adb-984752964297111.11.azuredatabricks.net/serving-endpoints
 _cached_client = None
 
 
+def get_databricks_token():
+    """
+    Get authentication token from various sources in priority order:
+    1. Service Principal (automatic in Databricks Apps) - DATABRICKS_CLIENT_ID + DATABRICKS_CLIENT_SECRET
+    2. Personal Access Token - DATABRICKS_TOKEN environment variable
+    3. Databricks Secrets - as fallback
+    """
+    # First, try to use Service Principal (Databricks Apps automatic authentication)
+    client_id = os.environ.get('DATABRICKS_CLIENT_ID')
+    client_secret = os.environ.get('DATABRICKS_CLIENT_SECRET')
+    
+    if client_id and client_secret:
+        print("✓ Using Service Principal authentication (Databricks Apps)")
+        # For OAuth2 client credentials flow
+        import requests
+        
+        # Extract workspace URL from BASE_URL
+        workspace_url = BASE_URL.split('/serving-endpoints')[0]
+        token_url = f"{workspace_url}/oidc/v1/token"
+        
+        try:
+            response = requests.post(
+                token_url,
+                data={
+                    'grant_type': 'client_credentials',
+                    'scope': 'all-apis'
+                },
+                auth=(client_id, client_secret),
+                timeout=10
+            )
+            response.raise_for_status()
+            token = response.json().get('access_token')
+            if token:
+                return token
+        except Exception as e:
+            print(f"⚠ Service Principal auth failed: {e}")
+            print("  Falling back to DATABRICKS_TOKEN")
+    
+    # Fallback to environment variable (for local development or manual config)
+    token = os.environ.get('DATABRICKS_TOKEN')
+    if token:
+        print("✓ Using DATABRICKS_TOKEN from environment")
+        return token
+    
+    # Try to get from Databricks secrets
+    try:
+        from databricks.sdk.runtime import dbutils
+        token = dbutils.secrets.get(scope="mobility-attrition", key="databricks-token")
+        if token:
+            print("✓ Found token in Databricks secret")
+            return token
+    except:
+        pass
+    
+    return None
+
+
 def get_client():
     """
     Get or create OpenAI client with proper authentication.
     
-    For Databricks Apps: Uses DATABRICKS_TOKEN from environment variable or secret.
-    This should be a service principal token or PAT with serving endpoint access.
-    
-    For local development: Falls back to DATABRICKS_TOKEN environment variable.
-    
-    Note: User tokens from X-Forwarded-Access-Token don't have the required OAuth
-    scopes to access serving endpoints, so we use an app-level token instead.
+    For Databricks Apps: Automatically uses Service Principal credentials (no manual config needed!)
+    For local development: Uses DATABRICKS_TOKEN environment variable
     """
     global _cached_client
     
-    # Use cached client if available (token doesn't change per request for serving endpoints)
+    # Use cached client if available
     if _cached_client is not None:
         return _cached_client
     
-    token = None
-    
-    # Try to get token from environment variable (works in both local and Databricks Apps)
-    token = os.environ.get('DATABRICKS_TOKEN')
-    
-    # Try to get from Databricks secrets if available (for Databricks Apps)
-    if not token:
-        try:
-            from databricks.sdk.runtime import dbutils
-            token = dbutils.secrets.get(scope="mobility-attrition", key="databricks-token")
-        except:
-            pass
+    token = get_databricks_token()
     
     if not token:
         raise ValueError(
-            "Authentication not configured. Set DATABRICKS_TOKEN as an environment variable "
-            "in your Databricks App configuration. This should be a service principal token "
-            "or personal access token with 'Can Query' permission on the serving endpoint."
+            "Authentication not configured. For Databricks Apps, ensure a Service Principal "
+            "is configured. For local development, set DATABRICKS_TOKEN environment variable."
         )
     
-    # Create OpenAI client with explicit settings
+    # Create OpenAI client
     client = OpenAI(
         api_key=token,
         base_url=BASE_URL,
