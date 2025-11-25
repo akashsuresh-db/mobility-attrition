@@ -63,9 +63,12 @@ def get_client():
             "For local development, set DATABRICKS_TOKEN environment variable."
         )
     
+    # Create OpenAI client with explicit settings to avoid proxy issues
     client = OpenAI(
         api_key=token,
-        base_url=BASE_URL
+        base_url=BASE_URL,
+        max_retries=2,
+        timeout=60.0
     )
     
     # Cache if using env var
@@ -148,6 +151,8 @@ def get_agent_response(conversation_history):
     """Get response from the Databricks agent endpoint"""
     try:
         client = get_client()
+        
+        # Call the agent endpoint
         response = client.responses.create(
             model=MODEL_NAME,
             input=conversation_history
@@ -160,11 +165,25 @@ def get_agent_response(conversation_history):
             for content in getattr(output, "content", [])
         )
         
+        if not response_text.strip():
+            return "I received your message but got an empty response. Please try again."
+        
         return response_text
+        
     except ValueError as e:
         # Authentication/configuration error
         return f"Configuration Error: {str(e)}"
+    except AttributeError as e:
+        # Response structure error
+        return f"Response Format Error: {str(e)}. The agent response format may have changed."
+    except TypeError as e:
+        # Type error (like the proxies issue)
+        return f"Client Error: {str(e)}. Please check the OpenAI SDK version."
     except Exception as e:
+        # General error with more details
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error calling agent: {error_details}")
         return f"Error: {str(e)}"
 
 
