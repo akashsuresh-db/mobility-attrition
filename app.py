@@ -198,12 +198,15 @@ def get_agent_response(conversation_history):
             input=conversation_history
         )
         
-        # Extract text from response
-        response_text = " ".join(
-            getattr(content, "text", "") 
-            for output in response.output 
-            for content in getattr(output, "content", [])
-        )
+        # Extract text from response - join with newlines to preserve structure
+        response_parts = []
+        for output in response.output:
+            for content in getattr(output, "content", []):
+                text = getattr(content, "text", "")
+                if text and text.strip():
+                    response_parts.append(text.strip())
+        
+        response_text = "\n".join(response_parts)
         
         if not response_text.strip():
             return "I received your message but got an empty response. Please try again."
@@ -260,34 +263,61 @@ def parse_markdown_table(text):
     Extract markdown tables from text and convert them to pandas DataFrames.
     Returns a list of (table_df, start_pos, end_pos) tuples and the text without tables.
     """
-    # Pattern to match markdown tables
-    table_pattern = r'\|[^\n]+\|[\n\r]+\|[-:\s|]+\|[\n\r]+((?:\|[^\n]+\|[\n\r]+)+)'
+    # More flexible pattern to match markdown tables (including those with empty first column)
+    table_pattern = r'\|[^\n]*\|(?:\r?\n|\r)\|[-:\s|]+\|(?:\r?\n|\r)((?:\|[^\n]*\|(?:\r?\n|\r))+)'
     
     tables = []
-    matches = list(re.finditer(table_pattern, text))
+    matches = list(re.finditer(table_pattern, text, re.MULTILINE))
     
     for match in matches:
         table_text = match.group(0)
         try:
             # Parse the markdown table
-            lines = [line.strip() for line in table_text.strip().split('\n') if line.strip()]
-            if len(lines) < 3:  # Need header, separator, and at least one data row
+            lines = [line.strip() for line in table_text.strip().split('\n') if line.strip() and '|' in line]
+            if len(lines) < 2:  # Need at least separator and one data row
                 continue
             
-            # Extract headers
-            headers = [h.strip() for h in lines[0].split('|')[1:-1]]
+            # Extract headers (first line)
+            header_line = lines[0]
+            headers = [h.strip() for h in header_line.split('|')]
+            headers = [h for h in headers if h]  # Remove empty strings
             
-            # Extract data rows (skip separator line)
+            # If first column is empty or just whitespace, use "Index" or row numbers
+            if not headers or headers[0] == '' or not headers[0].strip():
+                headers[0] = 'Index' if len(headers) > 0 else 'Column'
+            
+            # Skip separator line (line with dashes)
+            separator_idx = None
+            for i, line in enumerate(lines):
+                if re.match(r'\|[\s\-:|]+\|', line):
+                    separator_idx = i
+                    break
+            
+            if separator_idx is None:
+                continue
+            
+            # Extract data rows (after separator)
             data = []
-            for line in lines[2:]:
-                row = [cell.strip() for cell in line.split('|')[1:-1]]
-                data.append(row)
+            for line in lines[separator_idx + 1:]:
+                cells = [cell.strip() for cell in line.split('|')]
+                cells = [c for c in cells if c or c == '0']  # Keep '0' but remove truly empty
+                if cells:
+                    # Pad or trim to match header length
+                    while len(cells) < len(headers):
+                        cells.append('')
+                    cells = cells[:len(headers)]
+                    data.append(cells)
+            
+            if not data:
+                continue
             
             # Create DataFrame
             df = pd.DataFrame(data, columns=headers)
             tables.append((df, match.start(), match.end()))
         except Exception as e:
             print(f"Error parsing table: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     # Remove tables from text to get summary
@@ -303,48 +333,93 @@ def format_response_content(content):
     Format assistant response with tables and summary text.
     Returns a list of Dash components.
     """
-    # Remove agent name tags like <name>talent_genie</name>
-    content = re.sub(r'<name>.*?</name>', '', content)
+    # Extract agent names and track which agents responded
+    agent_names = re.findall(r'<name>(.*?)</name>', content)
+    
+    # Remove agent name tags
+    content_clean = re.sub(r'<name>.*?</name>', '', content).strip()
     
     # Parse tables from the content
-    tables, summary_text = parse_markdown_table(content)
+    tables, summary_text = parse_markdown_table(content_clean)
     
     components = []
+    
+    # Add agent badge if we know which agent responded
+    if agent_names:
+        unique_agents = list(dict.fromkeys(agent_names))  # Remove duplicates, preserve order
+        if 'supervisor' not in [a.lower() for a in unique_agents]:
+            badges = [
+                dbc.Badge(
+                    agent.replace('_', ' ').title(),
+                    color="info",
+                    className="me-2"
+                ) for agent in unique_agents
+            ]
+            components.append(html.Div(badges, className="mb-2"))
     
     # Add summary text if exists
     if summary_text:
         # Split by newlines and create paragraphs
         paragraphs = [p.strip() for p in summary_text.split('\n') if p.strip()]
-        for para in paragraphs:
-            components.append(html.P(para, className="mb-2"))
+        if paragraphs:
+            for para in paragraphs:
+                components.append(html.P(para, className="mb-2"))
     
     # Add tables
-    for df, _, _ in tables:
-        # Create a styled table
-        table_header = html.Thead(
-            html.Tr([html.Th(col, style={"padding": "8px", "backgroundColor": "#f8f9fa"}) for col in df.columns])
-        )
-        
-        table_rows = []
-        for _, row in df.iterrows():
-            table_rows.append(
-                html.Tr([html.Td(str(val), style={"padding": "8px"}) for val in row])
+    if tables:
+        for df, _, _ in tables:
+            # Create a styled table
+            table_header = html.Thead(
+                html.Tr([
+                    html.Th(col, style={
+                        "padding": "10px",
+                        "backgroundColor": "#007bff",
+                        "color": "white",
+                        "fontWeight": "bold"
+                    }) for col in df.columns
+                ], style={"backgroundColor": "#007bff"})
             )
-        
-        table_body = html.Tbody(table_rows)
-        
-        table = dbc.Table(
-            [table_header, table_body],
-            bordered=True,
-            hover=True,
-            responsive=True,
-            striped=True,
-            size="sm",
-            className="mt-3 mb-3"
-        )
-        components.append(table)
+            
+            table_rows = []
+            for idx, row in df.iterrows():
+                table_rows.append(
+                    html.Tr([
+                        html.Td(str(val), style={
+                            "padding": "8px",
+                            "borderBottom": "1px solid #dee2e6"
+                        }) for val in row
+                    ])
+                )
+            
+            table_body = html.Tbody(table_rows)
+            
+            table = dbc.Table(
+                [table_header, table_body],
+                bordered=True,
+                hover=True,
+                responsive=True,
+                striped=True,
+                size="sm",
+                className="mt-3 mb-3",
+                style={
+                    "backgroundColor": "white",
+                    "boxShadow": "0 2px 4px rgba(0,0,0,0.1)"
+                }
+            )
+            components.append(table)
     
-    return components if components else [html.Span(content)]
+    # If no components were created, show the original content
+    if not components:
+        # If content is very short or empty, provide a default message
+        if not content_clean or len(content_clean) < 5:
+            components.append(html.P(
+                "I processed your request. Please let me know if you need more information.",
+                className="text-muted"
+            ))
+        else:
+            components.append(html.Span(content_clean))
+    
+    return components
 
 
 def create_message_div(role, content):
