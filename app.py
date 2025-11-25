@@ -48,19 +48,9 @@ def get_client():
     # Try to get from Databricks secrets if available (for Databricks Apps)
     if not token:
         try:
-            # Try common secret scopes
             from databricks.sdk.runtime import dbutils
-            secret_scopes = ["mobility-attrition", "app-secrets", "default"]
-            for scope in secret_scopes:
-                try:
-                    token = dbutils.secrets.get(scope=scope, key="databricks-token")
-                    if token:
-                        print(f"✓ Found token in secret scope: {scope}")
-                        break
-                except:
-                    continue
-        except Exception as e:
-            print(f"Could not access Databricks secrets: {e}")
+            token = dbutils.secrets.get(scope="mobility-attrition", key="databricks-token")
+        except:
             pass
     
     if not token:
@@ -83,40 +73,11 @@ def get_client():
     
     return client
 
-# Check if token is configured
-def check_token_configured():
-    """Check if DATABRICKS_TOKEN is available"""
-    token = os.environ.get('DATABRICKS_TOKEN')
-    if token:
-        return True
-    
-    # Check secrets
-    try:
-        from databricks.sdk.runtime import dbutils
-        for scope in ["mobility-attrition", "app-secrets", "default"]:
-            try:
-                token = dbutils.secrets.get(scope=scope, key="databricks-token")
-                if token:
-                    return True
-            except:
-                continue
-    except:
-        pass
-    
-    return False
-
 # App layout
 app.layout = dbc.Container([
     dbc.Row([
         dbc.Col([
             html.H1("Talent Mobility & Attrition Chatbot", className="text-center my-4"),
-        ])
-    ]),
-    
-    # Configuration status banner
-    dbc.Row([
-        dbc.Col([
-            html.Div(id="config-status-banner", className="mb-3")
         ])
     ]),
     
@@ -271,63 +232,6 @@ def create_message_div(role, content):
 
 
 @app.callback(
-    Output("config-status-banner", "children"),
-    Input("config-status-banner", "id")
-)
-def update_config_status(_):
-    """Display configuration status banner"""
-    is_configured = check_token_configured()
-    
-    if is_configured:
-        # Show success banner
-        return dbc.Alert([
-            html.I(className="bi bi-check-circle-fill me-2"),
-            html.Strong("✓ Configuration OK"),
-            " - The app is properly configured and ready to use."
-        ], color="success", className="mb-0", dismissable=True)
-    else:
-        # Show warning banner with setup instructions
-        return dbc.Alert([
-            html.H5([
-                html.I(className="bi bi-exclamation-triangle-fill me-2"),
-                "⚠️ Configuration Required"
-            ], className="alert-heading"),
-            html.Hr(),
-            html.P([
-                "The app needs a ", html.Strong("DATABRICKS_TOKEN"), " to access the agent endpoint."
-            ]),
-            html.P("To fix this:", className="mb-2"),
-            html.Ol([
-                html.Li([
-                    html.Strong("Create a Personal Access Token: "),
-                    "Go to your Databricks workspace → Your Profile → Settings → Developer → Generate new token"
-                ]),
-                html.Li([
-                    html.Strong("Grant endpoint permissions: "),
-                    f"Go to Serving → Serving Endpoints → {MODEL_NAME} → Permissions → Grant your user 'Can Query' permission"
-                ]),
-                html.Li([
-                    html.Strong("Configure the token: "),
-                    "In your Databricks App settings, add an environment variable with Key: ",
-                    html.Code("DATABRICKS_TOKEN"),
-                    " and Value: your token"
-                ]),
-                html.Li([
-                    html.Strong("Redeploy the app"),
-                    " to apply the changes"
-                ])
-            ], className="mb-2"),
-            html.P([
-                "See ",
-                html.A("DATABRICKS_APPS_SETUP.md", 
-                       href="https://github.com/akashsuresh-db/mobility-attrition/blob/main/DATABRICKS_APPS_SETUP.md",
-                       target="_blank"),
-                " for detailed instructions."
-            ], className="mb-0")
-        ], color="warning", className="mb-0")
-
-
-@app.callback(
     [Output("chat-history", "children"),
      Output("conversation-history", "data"),
      Output("user-input", "value"),
@@ -343,25 +247,7 @@ def update_chat(send_clicks, clear_clicks, n_submit, user_message, conversation_
     ctx = callback_context
     
     if not ctx.triggered:
-        # Show welcome message on initial load
-        welcome_msg = []
-        if check_token_configured():
-            welcome_msg = [
-                create_message_div("assistant", 
-                    "👋 Hello! I'm your Talent Mobility & Attrition assistant. "
-                    "I can help you analyze attrition patterns, mobility trends, and workforce insights. "
-                    "Ask me anything about your organization's talent data!"
-                )
-            ]
-        else:
-            welcome_msg = [
-                create_message_div("assistant",
-                    "⚠️ Welcome! I'm ready to help with talent mobility and attrition insights, "
-                    "but the app needs to be configured first. "
-                    "Please see the yellow banner above for setup instructions."
-                )
-            ]
-        return welcome_msg, [], "", ""
+        return [], [], "", ""
     
     button_id = ctx.triggered[0]["prop_id"].split(".")[0]
     
