@@ -4,9 +4,16 @@ import dash
 from dash import dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 from flask import request
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # Initialize the Dash app with a modern theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+# Expose the Flask server for production deployments (like Databricks Apps)
+server = app.server
+
+# Configure proxy support for Databricks Apps (handles X-Forwarded-* headers)
+server.wsgi_app = ProxyFix(server.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 MODEL_NAME = "agents_akash_s_demo-talent-mobility_attrition"
 BASE_URL = "https://adb-984752964297111.11.azuredatabricks.net/serving-endpoints"
@@ -264,9 +271,16 @@ if __name__ == "__main__":
         print("  → Databricks Apps (using on-behalf-of authentication)")
         print("  → Token will be validated per-request")
     
+    # Get port from environment (Databricks Apps sets this)
+    port = int(os.environ.get('PORT', 8050))
+    
+    # Disable debug mode in production (Databricks Apps)
+    debug_mode = has_env_token  # Only debug in local development
+    
     print("\n" + "=" * 60)
-    print(f"Starting server on http://0.0.0.0:8050")
+    print(f"Starting server on http://0.0.0.0:{port}")
+    print(f"Debug mode: {debug_mode}")
     print("=" * 60 + "\n")
     
-    app.run_server(debug=True, host="0.0.0.0", port=8050)
+    app.run_server(debug=debug_mode, host="0.0.0.0", port=port)
 
