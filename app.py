@@ -26,44 +26,41 @@ def get_client():
     """
     Get or create OpenAI client with proper authentication.
     
-    In Databricks Apps, this uses the X-Forwarded-Access-Token header
-    which contains the user's access token (on-behalf-of authentication).
+    For Databricks Apps: Uses DATABRICKS_TOKEN from environment variable or secret.
+    This should be a service principal token or PAT with serving endpoint access.
     
-    For local development, falls back to DATABRICKS_TOKEN environment variable.
+    For local development: Falls back to DATABRICKS_TOKEN environment variable.
+    
+    Note: User tokens from X-Forwarded-Access-Token don't have the required OAuth
+    scopes to access serving endpoints, so we use an app-level token instead.
     """
     global _cached_client
     
-    token = None
-    use_cache = False
-    
-    # First, try to get token from Databricks Apps HTTP headers
-    # This header is automatically set by Databricks Apps with the user's token
-    try:
-        if request:
-            token = request.headers.get('X-Forwarded-Access-Token')
-            if token:
-                # Don't cache when using per-request tokens
-                use_cache = False
-    except RuntimeError:
-        # Not in a request context (e.g., during startup)
-        pass
-    
-    # Fall back to environment variable for local development
-    if not token:
-        token = os.environ.get('DATABRICKS_TOKEN')
-        use_cache = True  # Cache when using env var
-    
-    # If we're using cache and have a cached client, return it
-    if use_cache and _cached_client is not None:
+    # Use cached client if available (token doesn't change per request for serving endpoints)
+    if _cached_client is not None:
         return _cached_client
+    
+    token = None
+    
+    # Try to get token from environment variable (works in both local and Databricks Apps)
+    token = os.environ.get('DATABRICKS_TOKEN')
+    
+    # Try to get from Databricks secrets if available (for Databricks Apps)
+    if not token:
+        try:
+            from databricks.sdk.runtime import dbutils
+            token = dbutils.secrets.get(scope="mobility-attrition", key="databricks-token")
+        except:
+            pass
     
     if not token:
         raise ValueError(
-            "Authentication not configured. For Databricks Apps, ensure the app has access to user tokens. "
-            "For local development, set DATABRICKS_TOKEN environment variable."
+            "Authentication not configured. Set DATABRICKS_TOKEN as an environment variable "
+            "in your Databricks App configuration. This should be a service principal token "
+            "or personal access token with 'Can Query' permission on the serving endpoint."
         )
     
-    # Create OpenAI client with explicit settings to avoid proxy issues
+    # Create OpenAI client with explicit settings
     client = OpenAI(
         api_key=token,
         base_url=BASE_URL,
@@ -71,9 +68,8 @@ def get_client():
         timeout=60.0
     )
     
-    # Cache if using env var
-    if use_cache:
-        _cached_client = client
+    # Cache the client
+    _cached_client = client
     
     return client
 

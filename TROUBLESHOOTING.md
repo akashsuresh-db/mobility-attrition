@@ -1,40 +1,52 @@
 # Troubleshooting Guide
 
-## "Invalid scope" Error
+## "Invalid scope" or "OAuth token does not have required scopes" Error
 
-This error means your user account doesn't have permission to query the agent endpoint.
+This error means the authentication token doesn't have the required OAuth scopes to access serving endpoints.
+
+### Root Cause:
+
+User OAuth tokens (like X-Forwarded-Access-Token) don't include the scopes needed for serving endpoints. You need to configure an **app-level token** (PAT or service principal) instead.
 
 ### Solution:
 
-1. **Go to Databricks Workspace** → **Serving** → **Serving Endpoints**
+#### Step 1: Set DATABRICKS_TOKEN Environment Variable
 
-2. **Find your endpoint:** `agents_akash_s_demo-talent-mobility_attrition`
+The app needs a Personal Access Token (PAT) configured:
 
-3. **Click on the endpoint** to open its details
+1. **Create a PAT:**
+   - Go to Databricks → Your Profile → Settings → Developer
+   - Generate new token
+   - Copy the token value
 
-4. **Go to the Permissions tab**
-
-5. **Add permissions:**
-   - Click "Grant" or "Add"
-   - Add your user or a group you belong to
+2. **Grant permissions to your user:**
+   - Go to **Serving** → **Serving Endpoints**
+   - Find: `agents_akash_s_demo-talent-mobility_attrition`
+   - Click Permissions → Add your user
    - Grant **"Can Query"** permission
-   - Click "Save"
 
-6. **Redeploy or refresh your Databricks App**
+3. **Configure in Databricks App:**
+   - Go to your app settings
+   - Add Environment Variable:
+     - Key: `DATABRICKS_TOKEN`
+     - Value: Your PAT from step 1
+   - Save and **Redeploy**
 
-### Additional Checks:
+#### Step 2: Verify Configuration
 
-- Verify the endpoint name is correct in `app.py` (line 10):
+- Check the endpoint name in `app.py`:
   ```python
   MODEL_NAME = "agents_akash_s_demo-talent-mobility_attrition"
   ```
 
-- Check the base URL matches your workspace (line 11):
+- Verify the base URL matches your workspace:
   ```python
   BASE_URL = "https://adb-984752964297111.11.azuredatabricks.net/serving-endpoints"
   ```
 
-- Ensure the endpoint is in a "Ready" state (not stopped or failed)
+- Ensure the endpoint is "Ready" (not stopped)
+
+See [DATABRICKS_APPS_SETUP.md](DATABRICKS_APPS_SETUP.md) for detailed setup instructions.
 
 ---
 

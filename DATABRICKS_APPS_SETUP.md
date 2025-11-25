@@ -1,20 +1,61 @@
 # Deploying to Databricks Apps
 
-## Authentication (Automatic!)
+## Authentication Setup - IMPORTANT! 🔐
 
-Good news! The app now uses **on-behalf-of-user authentication** via HTTP headers, which means:
+**You MUST configure a token** for the app to access the agent endpoint.
 
-✅ **No manual token configuration needed in Databricks Apps**  
-✅ Each user authenticates with their own token automatically  
-✅ More secure - users only have access to what they're authorized for
+### Why?
 
-### How It Works
+User OAuth tokens (X-Forwarded-Access-Token) don't have the required scopes to access serving endpoints. The app needs an **app-level token** with explicit "Can Query" permissions on the endpoint.
 
-When running in Databricks Apps, the app automatically receives the user's access token via the `X-Forwarded-Access-Token` HTTP header. The app detects this and uses it to authenticate API calls to your agent endpoint.
+### Steps to Configure:
+
+#### 1. Create a Personal Access Token (PAT)
+
+- Go to your Databricks workspace
+- Click your profile → **Settings** → **Developer**
+- Click **Manage** next to Access tokens
+- Click **Generate new token**
+- Give it a name (e.g., "Mobility Attrition App")
+- Set expiration (or choose no expiration for production)
+- **Copy the token value** (you won't see it again!)
+
+#### 2. Grant Endpoint Permissions
+
+- Go to **Serving** → **Serving Endpoints**
+- Find your endpoint: `agents_akash_s_demo-talent-mobility_attrition`
+- Click on it → **Permissions** tab
+- Add your user with **"Can Query"** permission
+- Click **Save**
+
+#### 3. Configure Token in Databricks App
+
+**Option A: Environment Variable (Simpler)**
+
+1. Go to your Databricks workspace → **Apps**
+2. Select your app
+3. Click **Settings** or **Environment Configuration**
+4. Add Environment Variable:
+   - **Key:** `DATABRICKS_TOKEN`
+   - **Value:** Paste your PAT from step 1
+5. **Save** and **Redeploy** the app
+
+**Option B: Databricks Secrets (More Secure)**
+
+1. Create a secret scope:
+   ```bash
+   databricks secrets create-scope --scope mobility-attrition
+   ```
+
+2. Store your token:
+   ```bash
+   databricks secrets put --scope mobility-attrition --key databricks-token
+   ```
+   (Paste your PAT when prompted)
+
+3. The app will automatically read from this secret
 
 ### For Local Development
-
-When running locally, you still need to set the environment variable:
 
 ```bash
 export DATABRICKS_TOKEN='your_databricks_token_here'
@@ -31,12 +72,12 @@ python app.py
    - Go to **Apps** in the sidebar
    - Click **Create App** or select your existing app
    - Set the source file to `app.py`
-   - **No additional configuration needed!** ✨
+   - **Add DATABRICKS_TOKEN environment variable** (see Authentication Setup above)
 
 3. **Deploy:**
    - Click **Deploy**
    - Monitor the logs for any errors
-   - The app will automatically authenticate using the user's token
+   - The app will use the configured token to access the agent endpoint
 
 ## Troubleshooting
 
@@ -72,9 +113,9 @@ In Databricks Apps, you can view logs to see detailed error messages:
 
 **Databricks Apps (Production):**
 1. User accesses the app
-2. Databricks Apps automatically adds `X-Forwarded-Access-Token` header with user's token
-3. App uses this token to authenticate API calls
-4. Each user's requests use their own credentials
+2. App reads `DATABRICKS_TOKEN` from environment variable or secret
+3. App uses this app-level token to authenticate API calls to the serving endpoint
+4. All users share the same backend token (but can be individually authenticated at the app level if needed)
 
 **Local Development:**
 ```bash
@@ -83,4 +124,6 @@ python app.py
 ```
 - App uses the environment variable
 - All requests use the same token (yours)
+
+**Note:** We use an app-level token instead of per-user tokens because user OAuth tokens don't have the required scopes to access serving endpoints. This is a Databricks platform limitation.
 
