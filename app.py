@@ -1,10 +1,14 @@
 import os
+import re
+from io import StringIO
 from openai import OpenAI
 import dash
 from dash import dcc, html, Input, Output, State, callback_context
 import dash_bootstrap_components as dbc
 from flask import request
 from werkzeug.middleware.proxy_fix import ProxyFix
+import pandas as pd
+import markdown
 
 # Initialize the Dash app with a modern theme
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -251,8 +255,100 @@ def get_agent_response(conversation_history):
             return f"Error: {str(e)}"
 
 
+def parse_markdown_table(text):
+    """
+    Extract markdown tables from text and convert them to pandas DataFrames.
+    Returns a list of (table_df, start_pos, end_pos) tuples and the text without tables.
+    """
+    # Pattern to match markdown tables
+    table_pattern = r'\|[^\n]+\|[\n\r]+\|[-:\s|]+\|[\n\r]+((?:\|[^\n]+\|[\n\r]+)+)'
+    
+    tables = []
+    matches = list(re.finditer(table_pattern, text))
+    
+    for match in matches:
+        table_text = match.group(0)
+        try:
+            # Parse the markdown table
+            lines = [line.strip() for line in table_text.strip().split('\n') if line.strip()]
+            if len(lines) < 3:  # Need header, separator, and at least one data row
+                continue
+            
+            # Extract headers
+            headers = [h.strip() for h in lines[0].split('|')[1:-1]]
+            
+            # Extract data rows (skip separator line)
+            data = []
+            for line in lines[2:]:
+                row = [cell.strip() for cell in line.split('|')[1:-1]]
+                data.append(row)
+            
+            # Create DataFrame
+            df = pd.DataFrame(data, columns=headers)
+            tables.append((df, match.start(), match.end()))
+        except Exception as e:
+            print(f"Error parsing table: {e}")
+            continue
+    
+    # Remove tables from text to get summary
+    remaining_text = text
+    for _, start, end in reversed(tables):
+        remaining_text = remaining_text[:start] + remaining_text[end:]
+    
+    return tables, remaining_text.strip()
+
+
+def format_response_content(content):
+    """
+    Format assistant response with tables and summary text.
+    Returns a list of Dash components.
+    """
+    # Remove agent name tags like <name>talent_genie</name>
+    content = re.sub(r'<name>.*?</name>', '', content)
+    
+    # Parse tables from the content
+    tables, summary_text = parse_markdown_table(content)
+    
+    components = []
+    
+    # Add summary text if exists
+    if summary_text:
+        # Split by newlines and create paragraphs
+        paragraphs = [p.strip() for p in summary_text.split('\n') if p.strip()]
+        for para in paragraphs:
+            components.append(html.P(para, className="mb-2"))
+    
+    # Add tables
+    for df, _, _ in tables:
+        # Create a styled table
+        table_header = html.Thead(
+            html.Tr([html.Th(col, style={"padding": "8px", "backgroundColor": "#f8f9fa"}) for col in df.columns])
+        )
+        
+        table_rows = []
+        for _, row in df.iterrows():
+            table_rows.append(
+                html.Tr([html.Td(str(val), style={"padding": "8px"}) for val in row])
+            )
+        
+        table_body = html.Tbody(table_rows)
+        
+        table = dbc.Table(
+            [table_header, table_body],
+            bordered=True,
+            hover=True,
+            responsive=True,
+            striped=True,
+            size="sm",
+            className="mt-3 mb-3"
+        )
+        components.append(table)
+    
+    return components if components else [html.Span(content)]
+
+
 def create_message_div(role, content):
-    """Create a styled message div"""
+    """Create a styled message div with support for tables and formatted content"""
     if role == "user":
         return html.Div([
             html.Div([
@@ -262,10 +358,13 @@ def create_message_div(role, content):
                style={"backgroundColor": "#007bff", "color": "white", "marginLeft": "20%"})
         ])
     else:
+        # Format the content (parse tables, etc.)
+        formatted_content = format_response_content(content)
+        
         return html.Div([
             html.Div([
                 html.Strong("Assistant: ", className="me-2"),
-                html.Span(content)
+                html.Div(formatted_content)
             ], className="p-3 mb-2 rounded",
                style={"backgroundColor": "#e9ecef", "color": "black", "marginRight": "20%"})
         ])
