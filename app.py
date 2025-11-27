@@ -193,23 +193,33 @@ def get_agent_response(conversation_history):
         client = get_client()
         
         # Call the agent endpoint
+        print(f"Calling agent with history: {len(conversation_history)} messages")
         response = client.responses.create(
             model=MODEL_NAME,
             input=conversation_history
         )
         
+        # Debug: Print raw response structure
+        print(f"Response object type: {type(response)}")
+        print(f"Response output: {response.output if hasattr(response, 'output') else 'No output attr'}")
+        
         # Extract text from response - join with newlines to preserve structure
         response_parts = []
         for output in response.output:
+            print(f"Output type: {type(output)}, Output: {output}")
             for content in getattr(output, "content", []):
+                print(f"Content type: {type(content)}, Content: {content}")
                 text = getattr(content, "text", "")
+                print(f"Extracted text: '{text}'")
                 if text and text.strip():
                     response_parts.append(text.strip())
         
         response_text = "\n".join(response_parts)
+        print(f"Final response text length: {len(response_text)}")
+        print(f"Final response text: '{response_text}'")
         
         if not response_text.strip():
-            return "I received your message but got an empty response. Please try again."
+            return "⚠️ I received your message but got an empty response from the agent. This could mean:\n\n1. The agent endpoint is running but not processing queries correctly\n2. There might be an issue with the data sources or permissions\n3. The query might need to be rephrased\n\nPlease try rephrasing your question or check the agent endpoint logs."
         
         return response_text
         
@@ -479,9 +489,19 @@ def format_response_content(content):
         # If content is very short or empty, provide a default message
         if not content_clean or len(content_clean) < 5:
             components.append(html.P(
-                "I processed your request. Please let me know if you need more information.",
+                "⚠️ The agent returned an empty or incomplete response. Please try rephrasing your question.",
                 className="text-muted"
             ))
+        # Check if it's just a header with no content
+        elif content_clean.startswith('**') and len(content_clean) < 50:
+            components.append(html.Div([
+                html.P(content_clean, className="mb-2"),
+                html.P(
+                    "⚠️ The agent acknowledged your request but didn't provide a complete answer. "
+                    "This might indicate an issue with the agent configuration or data access.",
+                    className="text-warning small"
+                )
+            ]))
         else:
             components.append(html.Span(content_clean))
     
