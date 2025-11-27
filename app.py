@@ -307,9 +307,9 @@ def parse_markdown_table(text):
                     # Check if line is only separators (|, -, :, spaces)
                     cleaned = line.replace('|', '').replace('-', '').replace(':', '').replace(' ', '').replace('\t', '')
                     if not cleaned:
-                    separator_idx = i
+                        separator_idx = i
                         print(f"DEBUG parse_markdown_table - Found separator at line {i}: {line}")
-                    break
+                        break
             
             if separator_idx is None:
                 print(f"DEBUG parse_markdown_table - Skipping: no separator found")
