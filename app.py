@@ -287,6 +287,8 @@ def parse_markdown_table(text):
     pipe_pattern = patterns[0]
     matches = list(re.finditer(pipe_pattern, text, re.MULTILINE))
     
+    print(f"DEBUG parse_markdown_table - Found {len(matches)} potential pipe tables")
+    
     for match in matches:
         table_text = match.group(0)
         try:
@@ -307,7 +309,12 @@ def parse_markdown_table(text):
             # Extract headers
             header_line = lines[separator_idx - 1] if separator_idx > 0 else lines[0]
             headers = [h.strip() for h in header_line.split('|')]
-            headers = [h for h in headers if h != '']
+            
+            # Remove leading/trailing empty headers
+            while headers and headers[0] == '':
+                headers.pop(0)
+            while headers and headers[-1] == '':
+                headers.pop()
             
             if not headers:
                 continue
@@ -316,7 +323,12 @@ def parse_markdown_table(text):
             data = []
             for line in lines[separator_idx + 1:]:
                 cells = [cell.strip() for cell in line.split('|')]
-                cells = [c for c in cells if c != '' or c == '0']
+                # Remove leading/trailing empty cells to match header structure
+                while cells and cells[0] == '':
+                    cells.pop(0)
+                while cells and cells[-1] == '':
+                    cells.pop()
+                
                 if cells and len(cells) > 0:
                     # Ensure we have the right number of columns
                     while len(cells) < len(headers):
@@ -328,10 +340,16 @@ def parse_markdown_table(text):
             
             if data:
                 df = pd.DataFrame(data, columns=headers)
+                print(f"DEBUG parse_markdown_table - Successfully parsed table with {len(df)} rows and {len(df.columns)} columns")
+                print(f"DEBUG parse_markdown_table - Columns: {df.columns.tolist()}")
                 tables.append((df, match.start(), match.end()))
+            else:
+                print(f"DEBUG parse_markdown_table - No data extracted from table")
                 
         except Exception as e:
             print(f"Error parsing pipe table: {e}")
+            import traceback
+            traceback.print_exc()
             continue
     
     # Try tab-separated format: column1\tcolumn2\n---:---\nval1\tval2
@@ -383,10 +401,17 @@ def format_response_content(content):
     
     # Remove common unhelpful phrases
     content_clean = re.sub(r'\bEMPTY\b', '', content_clean, flags=re.IGNORECASE)
-    content_clean = re.sub(r'\s+', ' ', content_clean).strip()  # Normalize whitespace
     
-    # Parse tables from the content
+    # Parse tables from the content (BEFORE normalizing whitespace to preserve table structure)
     tables, summary_text = parse_markdown_table(content_clean)
+    
+    # Debug logging
+    print(f"DEBUG format_response - Found {len(tables)} tables")
+    print(f"DEBUG format_response - Summary text length: {len(summary_text)}")
+    print(f"DEBUG format_response - Content clean preview: {content_clean[:300]}")
+    
+    # Now normalize whitespace in the summary text only (not the whole content with tables)
+    summary_text = re.sub(r'[ \t]+', ' ', summary_text).strip()  # Normalize spaces/tabs but keep newlines
     
     components = []
     
