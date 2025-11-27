@@ -10,8 +10,8 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 import pandas as pd
 import markdown
 
-# Initialize the Dash app with a modern theme
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+# Initialize the Dash app with a dark theme
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.DARKLY])
 
 # Expose the Flask server for production deployments (like Databricks Apps)
 server = app.server
@@ -136,7 +136,7 @@ app.layout = dbc.Container([
                             "height": "500px",
                             "overflowY": "auto",
                             "padding": "20px",
-                            "backgroundColor": "#f8f9fa"
+                            "backgroundColor": "#1a1a1a"
                         }
                     )
                 ])
@@ -307,9 +307,9 @@ def parse_markdown_table(text):
                     # Check if line is only separators (|, -, :, spaces)
                     cleaned = line.replace('|', '').replace('-', '').replace(':', '').replace(' ', '').replace('\t', '')
                     if not cleaned:
-                        separator_idx = i
+                    separator_idx = i
                         print(f"DEBUG parse_markdown_table - Found separator at line {i}: {line}")
-                        break
+                    break
             
             if separator_idx is None:
                 print(f"DEBUG parse_markdown_table - Skipping: no separator found")
@@ -378,11 +378,11 @@ def parse_markdown_table(text):
                 # Ensure we have exactly the right number of columns
                 cells = cells[:num_cols]
                 while len(cells) < num_cols:
-                    cells.append('')
+                        cells.append('')
                 
-                # Skip rows with all empty values
+                    # Skip rows with all empty values
                 if cells and any(c for c in cells):
-                    data.append(cells)
+                        data.append(cells)
                     print(f"DEBUG parse_markdown_table - Row {row_idx}: ✅ added to data")
                 else:
                     print(f"DEBUG parse_markdown_table - Row {row_idx}: ❌ skipped (all empty)")
@@ -530,12 +530,12 @@ def format_response_content(content):
                 html.Tr([
                     html.Th(col, style={
                         "padding": "10px",
-                        "backgroundColor": "#007bff",
+                        "backgroundColor": "#0d6efd",
                         "color": "white",
                         "fontWeight": "bold",
                         "textAlign": "left"
                     }) for col in df.columns
-                ], style={"backgroundColor": "#007bff"})
+                ], style={"backgroundColor": "#0d6efd"})
             )
             
             table_rows = []
@@ -551,8 +551,9 @@ def format_response_content(content):
                     cells.append(
                         html.Td(cell_val, style={
                             "padding": "8px",
-                            "borderBottom": "1px solid #dee2e6",
-                            "textAlign": "left"
+                            "borderBottom": "1px solid #495057",
+                            "textAlign": "left",
+                            "color": "#e9ecef"
                         })
                     )
                 table_rows.append(html.Tr(cells))
@@ -567,9 +568,10 @@ def format_response_content(content):
                 striped=True,
                 size="sm",
                 className="mt-3 mb-3",
+                dark=True,
                 style={
-                    "backgroundColor": "white",
-                    "boxShadow": "0 2px 4px rgba(0,0,0,0.1)",
+                    "backgroundColor": "#212529",
+                    "boxShadow": "0 2px 4px rgba(0,0,0,0.3)",
                     "borderRadius": "4px",
                     "overflow": "hidden"
                 }
@@ -608,7 +610,7 @@ def create_message_div(role, content):
                 html.Strong("You: ", className="me-2"),
                 html.Span(content)
             ], className="p-3 mb-2 rounded", 
-               style={"backgroundColor": "#007bff", "color": "white", "marginLeft": "20%"})
+               style={"backgroundColor": "#0d6efd", "color": "white", "marginLeft": "20%"})
         ])
     else:
         # Format the content (parse tables, etc.)
@@ -619,7 +621,7 @@ def create_message_div(role, content):
                 html.Strong("Assistant: ", className="me-2"),
                 html.Div(formatted_content)
             ], className="p-3 mb-2 rounded",
-               style={"backgroundColor": "#e9ecef", "color": "black", "marginRight": "20%"})
+               style={"backgroundColor": "#2d3238", "color": "#e9ecef", "marginRight": "20%"})
         ])
 
 
