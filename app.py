@@ -299,13 +299,17 @@ def parse_markdown_table(text):
                 print(f"DEBUG parse_markdown_table - Skipping: too few lines")
                 continue
             
-            # Find separator line
+            # Find separator line (must contain dashes, not just spaces)
             separator_idx = None
             for i, line in enumerate(lines):
-                if re.match(r'\|[\s\-:|]+\|', line) or re.match(r'[-:\s|]+', line):
-                    separator_idx = i
-                    print(f"DEBUG parse_markdown_table - Found separator at line {i}: {line}")
-                    break
+                # Separator line must have pipes and dashes
+                if '|' in line and '-' in line:
+                    # Check if line is only separators (|, -, :, spaces)
+                    cleaned = line.replace('|', '').replace('-', '').replace(':', '').replace(' ', '').replace('\t', '')
+                    if not cleaned:
+                        separator_idx = i
+                        print(f"DEBUG parse_markdown_table - Found separator at line {i}: {line}")
+                        break
             
             if separator_idx is None:
                 print(f"DEBUG parse_markdown_table - Skipping: no separator found")
