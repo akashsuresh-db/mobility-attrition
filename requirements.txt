@@ -4,4 +4,7 @@ openai>=1.54.0
 requests>=2.31.0
 markdown>=3.5.0
 pandas>=2.0.0
+databricks-langchain>=0.1.0
+langgraph>=0.1.0
+langchain>=0.1.0
 
