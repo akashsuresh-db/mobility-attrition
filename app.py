@@ -291,9 +291,12 @@ def parse_markdown_table(text):
     
     for match in matches:
         table_text = match.group(0)
+        print(f"DEBUG parse_markdown_table - Processing table text:\n{table_text[:200]}")
         try:
             lines = [line.strip() for line in table_text.strip().split('\n') if line.strip() and '|' in line]
+            print(f"DEBUG parse_markdown_table - Extracted {len(lines)} lines from table")
             if len(lines) < 2:
+                print(f"DEBUG parse_markdown_table - Skipping: too few lines")
                 continue
             
             # Find separator line
@@ -301,9 +304,14 @@ def parse_markdown_table(text):
             for i, line in enumerate(lines):
                 if re.match(r'\|[\s\-:|]+\|', line) or re.match(r'[-:\s|]+', line):
                     separator_idx = i
+                    print(f"DEBUG parse_markdown_table - Found separator at line {i}: {line}")
                     break
             
-            if separator_idx is None or separator_idx == 0:
+            if separator_idx is None:
+                print(f"DEBUG parse_markdown_table - Skipping: no separator found")
+                continue
+            if separator_idx == 0:
+                print(f"DEBUG parse_markdown_table - Skipping: separator at index 0")
                 continue
             
             # Extract headers - strip empty leading/trailing cells
@@ -325,8 +333,10 @@ def parse_markdown_table(text):
             
             # Extract data rows - dynamically handle any number of columns
             data = []
-            for line in lines[separator_idx + 1:]:
+            print(f"DEBUG parse_markdown_table - Processing {len(lines) - separator_idx - 1} data rows")
+            for row_idx, line in enumerate(lines[separator_idx + 1:]):
                 raw_cells = [cell.strip() for cell in line.split('|')]
+                print(f"DEBUG parse_markdown_table - Row {row_idx}: raw_cells = {raw_cells}")
                 
                 # Remove empty cells from start and end
                 while raw_cells and raw_cells[0] == '':
@@ -334,7 +344,10 @@ def parse_markdown_table(text):
                 while raw_cells and raw_cells[-1] == '':
                     raw_cells.pop()
                 
+                print(f"DEBUG parse_markdown_table - Row {row_idx}: after cleanup = {raw_cells} (len={len(raw_cells)} vs headers={num_cols})")
+                
                 if not raw_cells:
+                    print(f"DEBUG parse_markdown_table - Row {row_idx}: skipping empty row")
                     continue
                 
                 # Smart column extraction:
@@ -344,15 +357,19 @@ def parse_markdown_table(text):
                     if raw_cells[0].isdigit():
                         # Skip the index, take the rest
                         cells = raw_cells[1:num_cols+1]
+                        print(f"DEBUG parse_markdown_table - Row {row_idx}: detected pandas index, cells = {cells}")
                     else:
                         # Take first N columns
                         cells = raw_cells[:num_cols]
+                        print(f"DEBUG parse_markdown_table - Row {row_idx}: taking first {num_cols} cells = {cells}")
                 elif len(raw_cells) == num_cols:
                     # Perfect match
                     cells = raw_cells
+                    print(f"DEBUG parse_markdown_table - Row {row_idx}: perfect match, cells = {cells}")
                 else:
                     # Fewer cells than headers - pad with empty strings
                     cells = raw_cells + [''] * (num_cols - len(raw_cells))
+                    print(f"DEBUG parse_markdown_table - Row {row_idx}: padded cells = {cells}")
                 
                 # Ensure we have exactly the right number of columns
                 cells = cells[:num_cols]
@@ -362,16 +379,19 @@ def parse_markdown_table(text):
                 # Skip rows with all empty values
                 if cells and any(c for c in cells):
                     data.append(cells)
-                    print(f"DEBUG parse_markdown_table - Parsed row: {cells}")
+                    print(f"DEBUG parse_markdown_table - Row {row_idx}: ✅ added to data")
+                else:
+                    print(f"DEBUG parse_markdown_table - Row {row_idx}: ❌ skipped (all empty)")
             
+            print(f"DEBUG parse_markdown_table - Extracted {len(data)} data rows")
             if data:
                 df = pd.DataFrame(data, columns=headers)
-                print(f"DEBUG parse_markdown_table - Successfully parsed table with {len(df)} rows and {len(df.columns)} columns")
+                print(f"DEBUG parse_markdown_table - ✅ Successfully parsed table with {len(df)} rows and {len(df.columns)} columns")
                 print(f"DEBUG parse_markdown_table - Columns: {df.columns.tolist()}")
-                print(f"DEBUG parse_markdown_table - First row: {data[0] if data else 'N/A'}")
+                print(f"DEBUG parse_markdown_table - Sample rows: {data[:2]}")
                 tables.append((df, match.start(), match.end()))
             else:
-                print(f"DEBUG parse_markdown_table - No data extracted from table")
+                print(f"DEBUG parse_markdown_table - ❌ No data rows extracted from table")
                 
         except Exception as e:
             print(f"Error parsing pipe table: {e}")
