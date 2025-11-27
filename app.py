@@ -378,11 +378,11 @@ def parse_markdown_table(text):
                 # Ensure we have exactly the right number of columns
                 cells = cells[:num_cols]
                 while len(cells) < num_cols:
-                        cells.append('')
+                    cells.append('')
                 
-                    # Skip rows with all empty values
+                # Skip rows with all empty values
                 if cells and any(c for c in cells):
-                        data.append(cells)
+                    data.append(cells)
                     print(f"DEBUG parse_markdown_table - Row {row_idx}: ✅ added to data")
                 else:
                     print(f"DEBUG parse_markdown_table - Row {row_idx}: ❌ skipped (all empty)")
