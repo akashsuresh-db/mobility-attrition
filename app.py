@@ -498,10 +498,15 @@ def format_response_content(content):
                 else:
                     print(f"DEBUG format_response - ❌ Skipped paragraph {idx} (table remnant)")
     
-    # Add tables
+    # Add tables - only show the LAST table (from supervisor_summarizer, not duplicates from genie)
     if tables:
         print(f"DEBUG format_response - Processing {len(tables)} tables for display")
-        for table_idx, (df, _, _) in enumerate(tables):
+        
+        # Only use the last table if we have duplicates
+        tables_to_display = [tables[-1]] if len(tables) > 1 else tables
+        print(f"DEBUG format_response - Displaying {len(tables_to_display)} table(s) (last one only)")
+        
+        for table_idx, (df, _, _) in enumerate(tables_to_display):
             print(f"DEBUG format_response - Table {table_idx}: {len(df)} rows, {len(df.columns)} cols")
             # Skip tables with no meaningful data
             if df.empty or len(df) == 0:
