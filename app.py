@@ -459,6 +459,7 @@ def format_response_content(content):
     # Debug logging
     print(f"DEBUG format_response - Found {len(tables)} tables")
     print(f"DEBUG format_response - Summary text length: {len(summary_text)}")
+    print(f"DEBUG format_response - Summary text: '{summary_text}'")
     print(f"DEBUG format_response - Content clean preview: {content_clean[:300]}")
     
     # Now normalize whitespace in the summary text only (not the whole content with tables)
@@ -486,17 +487,25 @@ def format_response_content(content):
     if summary_text:
         # Split by newlines and create paragraphs
         paragraphs = [p.strip() for p in summary_text.split('\n') if p.strip() and len(p.strip()) > 3]
+        print(f"DEBUG format_response - Found {len(paragraphs)} paragraphs in summary")
         if paragraphs:
-            for para in paragraphs:
+            for idx, para in enumerate(paragraphs):
+                print(f"DEBUG format_response - Paragraph {idx}: {para[:100]}")
                 # Skip if it looks like table remnants
                 if not re.match(r'^[-:\s|]+$', para) and '|' not in para[:10]:
                     components.append(html.P(para, className="mb-2"))
+                    print(f"DEBUG format_response - ✅ Added paragraph {idx}")
+                else:
+                    print(f"DEBUG format_response - ❌ Skipped paragraph {idx} (table remnant)")
     
     # Add tables
     if tables:
-        for df, _, _ in tables:
+        print(f"DEBUG format_response - Processing {len(tables)} tables for display")
+        for table_idx, (df, _, _) in enumerate(tables):
+            print(f"DEBUG format_response - Table {table_idx}: {len(df)} rows, {len(df.columns)} cols")
             # Skip tables with no meaningful data
             if df.empty or len(df) == 0:
+                print(f"DEBUG format_response - ❌ Skipping table {table_idx}: empty")
                 continue
             
             # Check if table has any non-empty values
@@ -507,8 +516,10 @@ def format_response_content(content):
                     break
             
             if not has_data:
+                print(f"DEBUG format_response - ❌ Skipping table {table_idx}: no data")
                 continue
             
+            print(f"DEBUG format_response - ✅ Adding table {table_idx} to display")
             # Create a styled table
             table_header = html.Thead(
                 html.Tr([
