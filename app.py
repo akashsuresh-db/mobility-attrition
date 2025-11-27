@@ -308,26 +308,40 @@ def parse_markdown_table(text):
             
             # Extract headers
             header_line = lines[separator_idx - 1] if separator_idx > 0 else lines[0]
-            headers = [h.strip() for h in header_line.split('|')]
+            raw_headers = [h.strip() for h in header_line.split('|')]
+            
+            # Count leading empty columns (for pandas index detection)
+            leading_empty_count = 0
+            for h in raw_headers:
+                if h == '':
+                    leading_empty_count += 1
+                else:
+                    break
+            
+            # Count trailing empty columns
+            trailing_empty_count = 0
+            for h in reversed(raw_headers):
+                if h == '':
+                    trailing_empty_count += 1
+                else:
+                    break
             
             # Remove leading/trailing empty headers
-            while headers and headers[0] == '':
-                headers.pop(0)
-            while headers and headers[-1] == '':
-                headers.pop()
+            headers = raw_headers[leading_empty_count:len(raw_headers)-trailing_empty_count if trailing_empty_count > 0 else len(raw_headers)]
             
             if not headers:
                 continue
             
+            print(f"DEBUG parse_markdown_table - Leading empty: {leading_empty_count}, Trailing empty: {trailing_empty_count}")
+            print(f"DEBUG parse_markdown_table - Cleaned headers: {headers}")
+            
             # Extract data rows
             data = []
             for line in lines[separator_idx + 1:]:
-                cells = [cell.strip() for cell in line.split('|')]
-                # Remove leading/trailing empty cells to match header structure
-                while cells and cells[0] == '':
-                    cells.pop(0)
-                while cells and cells[-1] == '':
-                    cells.pop()
+                raw_cells = [cell.strip() for cell in line.split('|')]
+                
+                # Apply same leading/trailing removal as headers
+                cells = raw_cells[leading_empty_count:len(raw_cells)-trailing_empty_count if trailing_empty_count > 0 else len(raw_cells)]
                 
                 if cells and len(cells) > 0:
                     # Ensure we have the right number of columns
@@ -342,6 +356,7 @@ def parse_markdown_table(text):
                 df = pd.DataFrame(data, columns=headers)
                 print(f"DEBUG parse_markdown_table - Successfully parsed table with {len(df)} rows and {len(df.columns)} columns")
                 print(f"DEBUG parse_markdown_table - Columns: {df.columns.tolist()}")
+                print(f"DEBUG parse_markdown_table - First row: {data[0] if data else 'N/A'}")
                 tables.append((df, match.start(), match.end()))
             else:
                 print(f"DEBUG parse_markdown_table - No data extracted from table")
