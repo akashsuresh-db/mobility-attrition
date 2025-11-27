@@ -175,6 +175,6 @@ If none of the above helps, please provide:
 ---
 
 **Updated:** 2025-11-27  
-**Agent Model:** `agents_akash_s_demo-talent-mobility_attrition`  
+**Agent Model:** `agents_akash_s_demo-talent-mobility_attrition_with_summary`  
 **Genie Space:** `01f0c9f705201d14b364f5daf28bb639`
 

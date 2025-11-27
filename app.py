@@ -19,7 +19,7 @@ server = app.server
 # Configure proxy support for Databricks Apps (handles X-Forwarded-* headers)
 server.wsgi_app = ProxyFix(server.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-MODEL_NAME = "agents_akash_s_demo-talent-mobility_attrition"
+MODEL_NAME = "agents_akash_s_demo-talent-mobility_attrition_with_summary"
 BASE_URL = "https://adb-984752964297111.11.azuredatabricks.net/serving-endpoints"
 
 # Cache client for local development (when using env var)
