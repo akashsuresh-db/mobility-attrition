@@ -51,18 +51,18 @@ This implementation enables **user-specific access to Genie Space**, ensuring ea
 
 ### 🔴 Initial Implementation (WRONG)
 
-The initial implementation violated OBO guidelines by initializing `UserCredentials()` at **module level**:
+The initial implementation violated OBO guidelines by initializing `ModelServingUserCredentials()` at **module level**:
 
 ```python
 # ❌ WRONG - Cell 3, Module Level
-client = DatabricksFunctionClient(credentials_provider=UserCredentials())
-llm = ChatDatabricks(endpoint=..., credentials_provider=UserCredentials())
+client = DatabricksFunctionClient(credentials_provider=ModelServingUserCredentials())
+llm = ChatDatabricks(endpoint=..., credentials_provider=ModelServingUserCredentials())
 supervisor = create_langgraph_with_nodes(llm, EXTERNALLY_SERVED_AGENTS)
 AGENT = LangGraphResponsesAgent(supervisor)
 ```
 
 **Problems:**
-- `UserCredentials()` called when `agent.py` loads (deployment time)
+- `ModelServingUserCredentials()` called when `agent.py` loads (deployment time)
 - No user request exists yet → no user context available
 - All users share the same LLM, client, and graph
 - Defeats the entire purpose of OBO authentication!
@@ -88,12 +88,12 @@ class LangGraphResponsesAgent(ResponsesAgent):
     
     def _create_graph_with_obo(self):
         # OBO resources created HERE (called from predict_stream)
-        client = DatabricksFunctionClient(credentials_provider=UserCredentials())
+        client = DatabricksFunctionClient(credentials_provider=ModelServingUserCredentials())
         set_uc_function_client(client)
         
         llm = ChatDatabricks(
             endpoint=self.llm_endpoint_name,
-            credentials_provider=UserCredentials()
+            credentials_provider=ModelServingUserCredentials()
         )
         
         return create_langgraph_with_nodes(llm, self.externally_served_agents)
@@ -107,7 +107,7 @@ class LangGraphResponsesAgent(ResponsesAgent):
 ```
 
 **Benefits:**
-- ✅ `UserCredentials()` called during request processing
+- ✅ `ModelServingUserCredentials()` called during request processing
 - ✅ User identity is available from request context
 - ✅ Each user gets isolated credentials and resources
 - ✅ Proper security and compliance
@@ -134,12 +134,12 @@ dbutils.library.restartPython()
 
 #### Import OBO Module
 ```python
-from databricks_ai_bridge import UserCredentials
+from databricks_ai_bridge import ModelServingUserCredentials
 ```
 
 #### Module-Level Configuration (NO OBO Resources)
 ```python
-# Configuration only - no UserCredentials() calls here!
+# Configuration only - no ModelServingUserCredentials() calls here!
 LLM_ENDPOINT_NAME = "databricks-gpt-5-nano"
 
 EXTERNALLY_SERVED_AGENTS = [
@@ -175,13 +175,13 @@ class LangGraphResponsesAgent(ResponsesAgent):
         Called inside predict/predict_stream where user identity is available.
         """
         # Create OBO-enabled client
-        client = DatabricksFunctionClient(credentials_provider=UserCredentials())
+        client = DatabricksFunctionClient(credentials_provider=ModelServingUserCredentials())
         set_uc_function_client(client)
         
         # Create OBO-enabled LLM
         llm = ChatDatabricks(
             endpoint=self.llm_endpoint_name,
-            credentials_provider=UserCredentials()
+            credentials_provider=ModelServingUserCredentials()
         )
         
         # Create graph with OBO resources
@@ -275,10 +275,10 @@ with mlflow.start_run():
 
 | # | Requirement | Status | Evidence |
 |---|-------------|--------|----------|
-| 1 | Import `UserCredentials` | ✅ PASS | `from databricks_ai_bridge import UserCredentials` |
-| 2 | NO `UserCredentials()` at module level | ✅ PASS | Only config stored at module scope |
-| 3 | NO `UserCredentials()` in `__init__()` | ✅ PASS | Only stores config parameters |
-| 4 | YES `UserCredentials()` in request method | ✅ PASS | Called in `_create_graph_with_obo()` |
+| 1 | Import `ModelServingUserCredentials` | ✅ PASS | `from databricks_ai_bridge import ModelServingUserCredentials` |
+| 2 | NO `ModelServingUserCredentials()` at module level | ✅ PASS | Only config stored at module scope |
+| 3 | NO `ModelServingUserCredentials()` in `__init__()` | ✅ PASS | Only stores config parameters |
+| 4 | YES `ModelServingUserCredentials()` in request method | ✅ PASS | Called in `_create_graph_with_obo()` |
 | 5 | New graph per request | ✅ PASS | `_create_graph_with_obo()` called per request |
 | 6 | `AuthPolicy` configured | ✅ PASS | System + User policies in MLflow logging |
 | 7 | `databricks-ai-bridge` dependency | ✅ PASS | In Cell 1 + pip_requirements |
@@ -289,7 +289,7 @@ with mlflow.start_run():
 ### Quick Visual Check
 
 ```
-Where is UserCredentials() called?
+Where is ModelServingUserCredentials() called?
 
 ❌ Module Level:        NO  (only config stored)
 ❌ __init__():          NO  (only stores strings)
@@ -306,7 +306,7 @@ Where is UserCredentials() called?
 ```
 Module loads (deployment time)
     ↓
-UserCredentials() called ← NO USER CONTEXT! ❌
+ModelServingUserCredentials() called ← NO USER CONTEXT! ❌
     ↓
 LLM + Client + Graph created once
     ↓
@@ -337,7 +337,7 @@ Store configuration only (no OBO resources)
 │       ↓                           ↓                        │
 │  _create_graph_with_obo()    _create_graph_with_obo()     │
 │       ↓                           ↓                        │
-│  UserCredentials()           UserCredentials()            │
+│  ModelServingUserCredentials()           ModelServingUserCredentials()            │
 │  (captures User A)           (captures User B)            │
 │       ↓                           ↓                        │
 │  Create Graph A              Create Graph B               │
@@ -364,12 +364,12 @@ Step 3: predict_stream(request) invoked
         ↓
 Step 4: _create_graph_with_obo() called
         ↓
-Step 5: UserCredentials() executed
+Step 5: ModelServingUserCredentials() executed
         ✅ Captures current user's identity from request
         ↓
 Step 6: Create OBO resources with user credentials
-        • DatabricksFunctionClient(credentials_provider=UserCredentials())
-        • ChatDatabricks(credentials_provider=UserCredentials())
+        • DatabricksFunctionClient(credentials_provider=ModelServingUserCredentials())
+        • ChatDatabricks(credentials_provider=ModelServingUserCredentials())
         • Graph with OBO-enabled LLM and client
         ↓
 Step 7: Execute Genie query with user's permissions
@@ -452,7 +452,7 @@ If row-level security is configured:
 Before deploying, verify:
 
 - [ ] `databricks-ai-bridge` installed
-- [ ] `UserCredentials` imported but not called at module level
+- [ ] `ModelServingUserCredentials` imported but not called at module level
 - [ ] `_create_graph_with_obo()` creates OBO resources
 - [ ] `predict_stream()` calls `_create_graph_with_obo()`
 - [ ] `auth_policy` configured in MLflow logging
@@ -469,7 +469,7 @@ Before deploying, verify:
 | File | Cell | Change | Purpose |
 |------|------|--------|---------|
 | **langgraph-agent-with-summary.ipynb** | Cell 1 | Added `databricks-ai-bridge` | OBO library dependency |
-| | Cell 3 | Removed module-level `UserCredentials()` | Defer to request time |
+| | Cell 3 | Removed module-level `ModelServingUserCredentials()` | Defer to request time |
 | | Cell 3 | Modified `LangGraphResponsesAgent.__init__()` | Store config only |
 | | Cell 3 | Added `_create_graph_with_obo()` method | Create OBO resources per request |
 | | Cell 3 | Modified `predict_stream()` | Call `_create_graph_with_obo()` |
@@ -519,7 +519,7 @@ Before deploying, verify:
 
 ## Troubleshooting
 
-### Issue: "UserCredentials not found"
+### Issue: "ModelServingUserCredentials not found"
 **Solution:** Ensure `databricks-ai-bridge` is installed (Cell 1)
 
 ### Issue: "All users see same data"
