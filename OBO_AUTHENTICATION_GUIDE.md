@@ -241,8 +241,8 @@ systemAuthPolicy = SystemAuthPolicy(resources=resources)
 userAuthPolicy = UserAuthPolicy(
     api_scopes=[
         "serving.serving-endpoints",     # For LLM endpoint access
-        "sql.sql-warehouses",            # For Genie SQL warehouse queries
-        "catalog.catalog-tables",        # For table access in Unity Catalog
+        "sql.warehouses",                # For Genie SQL warehouse queries
+        "sql.statement-execution",       # For executing SQL queries on tables
     ]
 )
 
@@ -524,6 +524,14 @@ Before deploying, verify:
 
 ### Issue: "Only one of `resources`, and `auth_policy` can be specified"
 **Solution:** Don't pass both `resources` and `auth_policy` to `log_model()`. When using `auth_policy`, the resources are already included in `SystemAuthPolicy(resources=resources)`. Remove the `resources=resources` parameter.
+
+### Issue: "Invalid user API scope(s) specified"
+**Solution:** Use the correct API scopes. Valid scopes include:
+- `serving.serving-endpoints` (for LLM endpoints)
+- `sql.warehouses` (NOT `sql.sql-warehouses`)
+- `sql.statement-execution` (NOT `catalog.catalog-tables`)
+- `mcp.genie` (for Genie spaces)
+- See the error message for the full list of allowed scopes
 
 ### Issue: "All users see same data"
 **Solution:** Verify `_create_graph_with_obo()` is called from `predict_stream()`, not at module level
