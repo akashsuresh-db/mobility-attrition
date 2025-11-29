@@ -603,11 +603,28 @@ Before deploying, verify:
 - [ ] Run Cell 3 in Databricks notebook (generates `agent.py`)
 - [ ] Run Cell 11 (logs model with OBO auth policy)
 - [ ] Run Cell 13 (registers to Unity Catalog)
-- [ ] Grant Genie Space access to users ("Can use" permission)
+- [ ] **CRITICAL:** Remove service principal from Genie Space permissions (see below)
+- [ ] Grant Genie Space access to actual users ("Can use" permission)
 - [ ] Set Genie Space sharing to "Run as viewer" (for RLS)
 - [ ] Configure RLS on Unity Catalog tables
 - [ ] Run Cell 15 (deploy to serving endpoint)
 - [ ] Test with different users to verify RLS enforcement
+
+### 🚨 CRITICAL: Remove Service Principal from Genie Space
+
+**Why this matters:**
+- If the service principal has access to Genie Space, the agent will use it
+- This bypasses OBO and shows ALL data (no RLS)
+- The service principal should NOT be in Genie Space permissions
+
+**Steps:**
+1. Go to **Genie Spaces** → Your space (01f0c9f705201d14b364f5daf28bb639)
+2. Click **"Permissions"** or **"Share"**
+3. **Remove** the service principal (looks like: `agents_akash_s_demo-talent-talent_agent_v1`)
+4. Ensure sharing mode is **"Run as viewer"**
+5. Only add actual users who need access
+
+**Result:** Agent will be forced to use user credentials via OBO, enforcing RLS!
 
 ---
 
