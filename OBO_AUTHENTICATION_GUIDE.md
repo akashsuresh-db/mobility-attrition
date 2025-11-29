@@ -247,11 +247,11 @@ userAuthPolicy = UserAuthPolicy(
 )
 
 # Log model with OBO authentication
+# Note: Don't pass resources separately - they're already in SystemAuthPolicy
 with mlflow.start_run():
     logged_agent_info = mlflow.pyfunc.log_model(
         name="agent",
         python_model="agent.py",
-        resources=resources,
         auth_policy=AuthPolicy(
             system_auth_policy=systemAuthPolicy,
             user_auth_policy=userAuthPolicy
@@ -521,6 +521,9 @@ Before deploying, verify:
 
 ### Issue: "ModelServingUserCredentials not found"
 **Solution:** Ensure `databricks-ai-bridge` is installed (Cell 1)
+
+### Issue: "Only one of `resources`, and `auth_policy` can be specified"
+**Solution:** Don't pass both `resources` and `auth_policy` to `log_model()`. When using `auth_policy`, the resources are already included in `SystemAuthPolicy(resources=resources)`. Remove the `resources=resources` parameter.
 
 ### Issue: "All users see same data"
 **Solution:** Verify `_create_graph_with_obo()` is called from `predict_stream()`, not at module level
