@@ -1,217 +1,260 @@
 # OBO Authentication Implementation Guide
 
 **Last Updated:** Nov 30, 2025  
-**Status:** ✅ **CRITICAL FIX IMPLEMENTED** - Bypassing GenieAgent Wrapper
+**Status:** ✅ **USING DOCUMENTED APPROACH** - GenieAgent with `client=` Parameter
 
 ---
 
 ## 🎯 Executive Summary
 
-**Your 3 findings confirmed the root cause:**
+**The documentation you shared revealed the KEY parameter we missed:**
 
-1. ✅ **Genie using SP credentials** → `PERMISSION_DENIED` errors
-2. ✅ **Supervisor hallucinating** → Fake Sales/Engineering data
-3. ✅ **No authorization prompt** → Normal (consent cached from first deployment)
+```python
+genie_agent = GenieAgent(
+    genie_space_id="<space_id>",
+    genie_agent_name="Genie",
+    client=user_client  # ← THIS is the parameter we never tried!
+)
+```
 
-**Solution:** Bypass the `GenieAgent` wrapper entirely and call Genie API directly with OBO credentials.
+**Solution:** Use the official `GenieAgent` wrapper with the documented `client=` parameter instead of direct API calls.
 
 ---
 
-## 🔴 Root Cause Analysis
+## 🔍 Root Cause: We Tried the Wrong Parameter Names
 
-### The Problem with GenieAgent
+### What We Tried (All Wrong):
+
+| Attempt | Parameter Name | Result |
+|---------|---------------|--------|
+| 1 | `workspace_client=user_client` | ❌ TypeError (not accepted) |
+| 2 | Environment variable `DATABRICKS_TOKEN` | ❌ Still used SP credentials |
+| 3 | Thread-local `Config` | ❌ Still used SP credentials |
+| 4 | Direct API calls (bypassing GenieAgent) | ⚠️ Works but against LangGraph pattern |
+
+### What the Documentation Says:
 
 ```python
-# ❌ GenieAgent from databricks-langchain does NOT support OBO
-GenieAgent(genie_space_id=..., ...)
-    ↓
-    Creates its own internal WorkspaceClient
-    ↓
-    Uses DEFAULT credentials (Service Principal)
-    ↓
-    ❌ Ignores OBO credentials we tried to provide
+# ✅ CORRECT (from official docs)
+client=user_client
 ```
 
-### Failed Attempts (All Unsuccessful)
-
-| Attempt | Method | Result |
-|---------|--------|--------|
-| 1 | Pass `workspace_client` parameter | ❌ TypeError (not accepted) |
-| 2 | Set `DATABRICKS_TOKEN` environment variable | ❌ Still used SP credentials |
-| 3 | Thread-local `Config` with OBO | ❌ Still used SP credentials |
-
-**Conclusion:** `GenieAgent` wrapper is incompatible with OBO authentication.
+**We never tried `client=` !** We tried `workspace_client=`, which doesn't exist!
 
 ---
 
-## ✅ SOLUTION: Direct Genie API Calls
+## ✅ CORRECT IMPLEMENTATION
 
-### Architecture
+### Architecture (Per Documentation)
 
 ```python
-# ✅ NEW APPROACH: Direct API calls with explicit OBO WorkspaceClient
+# 1. Create OBO credentials (inside predict, not __init__)
+obo_creds = ModelServingUserCredentials()
 
-1. Create OBO credentials
-   obo_creds = ModelServingUserCredentials()
+# 2. Create OBO WorkspaceClient
+user_client = WorkspaceClient(credentials_strategy=obo_creds)
 
-2. Create OBO WorkspaceClient
-   workspace_client = WorkspaceClient(credentials_strategy=obo_creds)
+# 3. Pass to GenieAgent via client= parameter
+genie_agent = GenieAgent(
+    genie_space_id="<space_id>",
+    genie_agent_name="Genie",
+    client=user_client  # ← CRITICAL!
+)
 
-3. Call Genie API directly
-   conversation = workspace_client.genie.start_conversation(
-       space_id=genie_space_id,
-       content=user_question
-   )
-   
-   message = workspace_client.genie.get_message(
-       space_id=space_id,
-       conversation_id=conversation_id,
-       message_id=message_id
-   )
-
-4. Parse response
-   return message.content or attachments
+# 4. Use genie_agent in LangGraph normally
+response = genie_agent.invoke({"messages": messages})
 ```
 
-### Key Changes Made
+### Key Requirements Checklist
 
-#### 1. **New Function: `query_genie_with_obo()`**
+| Requirement | Our Implementation | Status |
+|-------------|-------------------|---------|
+| ✅ Instantiate in `predict()` | Yes, in `_create_graph_with_obo()` | ✅ PASS |
+| ✅ Use `client=` parameter | Yes, `client=workspace_client` | ✅ PASS |
+| ✅ Declare `dashboards.genie` scope | Yes, in `UserAuthPolicy` | ✅ PASS |
+| ✅ Declare Genie Space resource | Yes, added to `resources` list | ✅ PASS |
+| ⚠️ Workspace OBO enabled | Unknown (check with admin) | ⚠️ CHECK |
+| ⚠️ Genie credential mode | Unknown (check in UI) | ⚠️ **CHECK THIS** |
 
-Created in Cell 3:
+---
 
+## 📋 Implementation Details
+
+### Cell 3: Agent Definition
+
+**Key Changes:**
+
+1. **Import GenieAgent:**
 ```python
-def query_genie_with_obo(workspace_client: WorkspaceClient, space_id: str, question: str) -> str:
-    """
-    Query Genie Space using OBO credentials via direct API call.
+from databricks_langchain.genie import GenieAgent
+```
+
+2. **Create OBO WorkspaceClient in `_create_graph_with_obo()`:**
+```python
+def _create_graph_with_obo(self):
+    obo_creds = ModelServingUserCredentials()
     
-    Bypasses GenieAgent wrapper to ensure user credentials are used.
-    """
-    # Start conversation
-    conversation = workspace_client.genie.start_conversation(
-        space_id=space_id,
-        content=question
+    # Create OBO-enabled WorkspaceClient
+    workspace_client = WorkspaceClient(credentials_strategy=obo_creds)
+    
+    # Pass to graph creation
+    graph = create_langgraph_with_nodes(
+        llm=llm,
+        workspace_client=workspace_client,  # ← For Genie
+        externally_served_agents=self.externally_served_agents
     )
-    
-    # Poll for results (with 60s timeout)
-    # Returns response text or error message
 ```
 
-#### 2. **Updated `create_langgraph_with_nodes()`**
-
+3. **Pass `client=` to GenieAgent in `create_langgraph_with_nodes()`:**
 ```python
-# OLD (used GenieAgent wrapper)
-def create_langgraph_with_nodes(llm, externally_served_agents):
-    genie_agent = GenieAgent(...)  # ❌ Uses SP credentials
-    
-# NEW (accepts OBO workspace client)
 def create_langgraph_with_nodes(llm, workspace_client, externally_served_agents):
-    genie_space_id = agent.space_id  # ✅ Just store config
+    for agent in externally_served_agents:
+        if isinstance(agent, Genie):
+            genie_agent = GenieAgent(
+                genie_space_id=agent.space_id,
+                genie_agent_name=agent.name,
+                description=agent.description,
+                client=workspace_client  # ← CRITICAL for OBO!
+            )
 ```
 
-#### 3. **Simplified `genie_node()`**
-
+4. **Use GenieAgent normally in `genie_node()`:**
 ```python
-# OLD (used GenieAgent wrapper)
 def genie_node(state):
-    response = genie_agent.invoke({"messages": messages})  # ❌
-    
-# NEW (direct API call)
-def genie_node(state):
-    user_question = extract_user_question(messages)
-    genie_response = query_genie_with_obo(
-        workspace_client=workspace_client,  # ✅ OBO credentials
-        space_id=genie_space_id,
-        question=user_question
-    )
+    response = genie_agent.invoke({"messages": messages})
+    # Parse response...
 ```
 
-#### 4. **Fixed Hallucination in `supervisor_summarizer()`**
+### Cell 11: MLflow Logging
 
+**Key Changes:**
+
+1. **Declare ALL Resources (per documentation):**
 ```python
-# Added error detection BEFORE calling LLM
-if any(error_keyword in genie_response for error_keyword in 
-       ["Error", "PERMISSION_DENIED", "FAILED", "failed with error"]):
-    return {"messages": [AIMessage(
-        content="I apologize, but I don't have access to the requested data..."
-    )]}
+resources = [
+    DatabricksServingEndpoint(endpoint_name=LLM_ENDPOINT_NAME),
+    DatabricksSQLWarehouse(warehouse_id="..."),
+]
 
-# Removed misleading EXAMPLE from prompt
-# OLD: Had Sales/Engineering example → LLM used it when Genie failed ❌
-# NEW: No examples, explicit instruction to use only provided data ✅
+# Add Genie Space to resources
+for agent in EXTERNALLY_SERVED_AGENTS:
+    if isinstance(agent, Genie):
+        resources.append(DatabricksGenieSpace(genie_space_id=agent.space_id))
 ```
 
-#### 5. **Simplified `_create_graph_with_obo()`**
+**Understanding:**
+- Resources list declares **WHAT** the agent needs
+- Auth policy determines **WHO** accesses them
+- Genie Space in resources + UserAuthPolicy = OBO access with RLS
 
+2. **UserAuthPolicy with correct scopes:**
 ```python
-# OLD (complex thread-local config manipulation)
-config = Config(credentials_strategy=obo_creds)
-threading.current_thread()._databricks_config = config
-try:
-    graph = create_langgraph_with_nodes(llm, agents)
-finally:
-    # Restore config...
-
-# NEW (simple and explicit)
-workspace_client = WorkspaceClient(credentials_strategy=obo_creds)
-graph = create_langgraph_with_nodes(llm, workspace_client, agents)
+userAuthPolicy = UserAuthPolicy(
+    api_scopes=[
+        "serving.serving-endpoints",
+        "sql.warehouses",
+        "sql.statement-execution",
+        "dashboards.genie",  # ← CRITICAL for Genie OBO
+    ]
+)
 ```
 
 ---
 
-## 📋 What You Need to Do Next
+## 🚨 CRITICAL: Genie Space Credential Mode
 
-### Step 1: Redeploy the Agent
+**Per the documentation you shared:**
 
-Run the notebook cells in Databricks:
+> "If set to 'run as embedded credentials,' queries may always run as the service principal or a generic agent account."
 
-```python
-# Cell 11: Log the model
-# Cell 12: Register the model
-# Cell 13: Deploy to serving endpoint
-```
+### ⚠️ ACTION REQUIRED: Check Genie Space Settings
 
-### Step 2: Verify OBO is Working
-
-**Test Query:**
-```
-"Show me all the BUs which employees are part of"
-```
-
-**Expected Results (with your user who has RLS on HR department):**
-
-✅ **SUCCESS:**
-- Response contains ONLY HR department data
-- NO `PERMISSION_DENIED` errors
-- NO hallucinated Sales/Engineering data
-
-❌ **STILL BROKEN:**
-- `PERMISSION_DENIED: Failed to fetch tables`
-- Shows all departments instead of just HR
-- Returns fake data
-
-### Step 3: Manual Cleanup (Optional but Recommended)
-
-**Remove Service Principal from Genie Space:**
+**Before redeploying, please check:**
 
 1. Go to Databricks workspace
 2. Navigate to your Genie Space
-3. Settings → Permissions
-4. Remove the service principal that was added
-5. Ensure only your user account has access
+3. Open Settings
+4. Look for "Credential Mode" or "Authentication Mode"
+5. Check the setting:
 
-**Why?** The SP should NOT have Genie Space access. Access should only happen via OBO user credentials.
+| Setting | Impact | Action |
+|---------|--------|--------|
+| "Run as viewer" / "OBO mode" | ✅ OBO will work | Proceed with deployment |
+| "Embedded credentials" / "Run as SP" | ❌ OBO CANNOT work | Change to "run as viewer" |
+
+**If it's set to "embedded credentials," our code changes won't help!** The Genie Space itself must be configured to support OBO.
 
 ---
 
-## 🔍 Validation Checklist
+## 🔄 What Changed from Previous Approach
 
-After redeployment, verify:
+### Before (Direct API):
+```python
+# Custom function to call Genie API directly
+def query_genie_with_obo(workspace_client, space_id, question):
+    conversation = workspace_client.genie.start_conversation(...)
+    message = workspace_client.genie.get_message(...)
+    # Parse response...
+    return response
 
-- [ ] Querying returns filtered data (only HR department for your user)
-- [ ] No `PERMISSION_DENIED` errors in response
-- [ ] No hallucinated data (Sales, Engineering, etc.)
-- [ ] Response says "I apologize, but I don't have access..." if user truly has no access
-- [ ] Different users get different data based on their RLS permissions
+# Use in genie_node
+def genie_node(state):
+    response = query_genie_with_obo(...)
+```
+
+**Issues:**
+- ❌ Against LangGraph routing pattern
+- ❌ Custom implementation (more code to maintain)
+- ❌ Loses GenieAgent features
+
+### After (Official Wrapper):
+```python
+# Use GenieAgent with client= parameter
+genie_agent = GenieAgent(
+    genie_space_id=agent.space_id,
+    genie_agent_name=agent.name,
+    client=workspace_client  # ← Simple!
+)
+
+# Use in genie_node
+def genie_node(state):
+    response = genie_agent.invoke({"messages": messages})
+```
+
+**Benefits:**
+- ✅ Follows official documentation
+- ✅ Aligns with LangGraph pattern
+- ✅ Simpler and more maintainable
+- ✅ Better error handling
+
+---
+
+## 🧪 Testing Checklist
+
+### Before Deployment:
+
+- [ ] **Check Genie Space credential mode** (CRITICAL!)
+  - Setting should be "run as viewer" or "OBO mode"
+  - NOT "embedded credentials"
+
+- [ ] **Verify workspace OBO is enabled**
+  - Ask workspace admin
+  - Requires MLflow 2.22.1+
+
+### After Deployment:
+
+- [ ] **Test with RLS-restricted user**
+  - Query: "Show me all the BUs which employees are part of"
+  - Expected: Only departments user has access to (e.g., HR only)
+  - NOT expected: All departments or permission errors
+
+- [ ] **Check for errors**
+  - No `PERMISSION_DENIED` errors
+  - No hallucinated data (Sales/Engineering from examples)
+
+- [ ] **Verify OBO is actually being used**
+  - Different users should see different data
+  - Data should match their RLS permissions
 
 ---
 
@@ -230,11 +273,11 @@ ModelServingUserCredentials()  ← Captures USER identity from request
     ↓
 WorkspaceClient(credentials_strategy=obo_creds)  ← OBO client
     ↓
-genie_node()
+GenieAgent(client=workspace_client)  ← Pass OBO client via client=
     ↓
-query_genie_with_obo(workspace_client, space_id, question)
+genie_agent.invoke({"messages": ...})
     ↓
-workspace_client.genie.start_conversation(...)  ← Uses USER credentials
+GenieAgent uses USER credentials internally
     ↓
 Genie Space queries Unity Catalog tables
     ↓
@@ -245,16 +288,25 @@ Returns filtered data to user
 
 ---
 
-## 📊 Before vs After
+## 📊 Implementation Validation
 
-| Aspect | BEFORE (GenieAgent) | AFTER (Direct API) |
-|--------|---------------------|-------------------|
-| **Genie Access** | GenieAgent wrapper | Direct API calls |
-| **Credentials** | Service Principal (SP) | User (OBO) |
-| **RLS Enforcement** | ❌ No (SP sees all) | ✅ Yes (user filtered) |
-| **Permission Errors** | ✅ Got errors | ❌ Should work |
-| **Hallucination** | ✅ Returned fake data | ❌ Returns error message |
-| **Authorization Prompt** | First time only | Cached (normal) |
+### Code Review:
+
+**✅ Cell 3 (agent.py):**
+- [x] Imports `GenieAgent`
+- [x] Creates `WorkspaceClient(credentials_strategy=obo_creds)` in `_create_graph_with_obo()`
+- [x] Passes `workspace_client` to `create_langgraph_with_nodes()`
+- [x] Uses `client=workspace_client` when creating `GenieAgent`
+- [x] `genie_node()` calls `genie_agent.invoke()`
+
+**✅ Cell 11 (MLflow Logging):**
+- [x] Declares `DatabricksGenieSpace` in `resources` list
+- [x] `UserAuthPolicy` includes `dashboards.genie` scope
+- [x] `SystemAuthPolicy(resources=resources)` declares all resources
+- [x] Both policies combined in `AuthPolicy`
+
+**✅ Cell 5 (Visualization):**
+- [x] Passes temporary `WorkspaceClient()` for visualization
 
 ---
 
@@ -263,111 +315,136 @@ Returns filtered data to user
 ### Issue 1: Still Getting Permission Denied
 
 **Possible Causes:**
-1. Old model version still deployed
-2. Endpoint didn't pick up new version
+1. **Genie Space credential mode is "embedded credentials"**
+   - **FIX:** Change to "run as viewer" in Genie Space settings
 
-**Solution:**
-```python
-# Check deployed version
-deployment_info = agents.get_deployment_info(UC_MODEL_NAME)
-print(f"Deployed version: {deployment_info.version}")
+2. Old model version still deployed
+   - **FIX:** Check deployed version matches latest
 
-# Ensure it matches the latest version you registered
-```
+3. Workspace OBO not enabled
+   - **FIX:** Ask admin to enable, ensure MLflow 2.22.1+
 
 ### Issue 2: Still Seeing All Data (No RLS)
 
 **Possible Causes:**
-1. Service principal still has table access
-2. RLS policies not configured correctly
+1. **Genie Space credential mode is "embedded credentials"**
+   - **FIX:** Change to "run as viewer"
 
-**Solution:**
-1. Remove SP from Genie Space permissions (UI)
-2. Verify RLS policies on tables:
-   ```sql
-   SHOW ROW FILTERS ON TABLE akash_s_demo.talent.dim_employees;
-   ```
+2. RLS policies not configured on tables
+   - **FIX:** Verify RLS policies exist:
+     ```sql
+     SHOW ROW FILTERS ON TABLE akash_s_demo.talent.dim_employees;
+     ```
 
-### Issue 3: Still Seeing Fake Sales/Engineering Data
+3. User actually has access to all data
+   - **FIX:** Test with different user who should have restricted access
+
+### Issue 3: TypeError on GenieAgent
+
+**Error:**
+```
+TypeError: GenieAgent() got an unexpected keyword argument 'client'
+```
 
 **Possible Causes:**
-1. Old cached response
-2. LLM still using examples from memory
+1. Old version of `databricks-langchain`
+   - **FIX:** Update to latest version
 
-**Solution:**
-1. Clear browser cache
-2. Ask a completely different question
-3. Check logs to see if Genie actually returned an error
+2. Wrong parameter name
+   - **FIX:** Verify using `client=`, not `workspace_client=`
 
 ---
 
-## 📝 Code Reference
+## 📝 Next Steps
 
-### Key Files Modified
+### 1. **CRITICAL: Check Genie Space Credential Mode**
 
-1. **Cell 3** (`%%writefile agent.py`):
-   - Added `query_genie_with_obo()` function
-   - Modified `create_langgraph_with_nodes()` to accept `workspace_client`
-   - Modified `genie_node()` to use direct API
-   - Modified `supervisor_summarizer()` to detect errors and prevent hallucination
-   - Modified `_create_graph_with_obo()` to create and pass OBO workspace client
-
-2. **Cell 5** (Visualization):
-   - Updated to pass temporary workspace client for graph visualization
-
-3. **Cell 11** (MLflow Logging):
-   - Resources: Only infrastructure (endpoint, warehouse)
-   - `DatabricksGenieSpace` and `DatabricksTable` removed from `SystemAuthPolicy`
-   - UserAuthPolicy includes `dashboards.genie` scope
-
----
-
-## 🎉 Expected Outcome
-
-After redeployment and testing:
-
-**User Query:** "Show me all the BUs which employees are part of"
-
-**Response (with RLS on HR department):**
-
+Before redeploying, please verify:
 ```
-Based on the available data, employees are currently assigned to the HR department.
-This represents the accessible organizational structure for your view.
-
-| Department | Employee Count |
-|------------|----------------|
-| HR         | 45             |
+Genie Space → Settings → Credential Mode = "Run as viewer" (or similar)
+NOT "Embedded credentials"
 ```
 
-**NOT:**
+**If this is set to "embedded credentials," stop here and change it first!**
+
+### 2. Redeploy the Agent
+
+Run notebook cells in Databricks:
+```
+Cell 11: Log model
+Cell 12: Register model
+Cell 13: Deploy to endpoint
+```
+
+### 3. Test with RLS User
+
+Query: "Show me all the BUs which employees are part of"
+
+**Expected (for user with HR-only access):**
+```
+Based on the available data, employees are part of the HR department.
+
+| Department | Count |
+|------------|-------|
+| HR         | 45    |
+```
+
+**NOT expected:**
 - ❌ Permission denied errors
-- ❌ Sales, Engineering, or other departments
-- ❌ Fake hallucinated data
+- ❌ All departments (Sales, Engineering, etc.)
+- ❌ Hallucinated data
+
+### 4. Report Results
+
+**Tell me:**
+- [ ] What is the Genie Space credential mode?
+- [ ] Did deployment succeed?
+- [ ] What data do you see when querying?
+- [ ] Any errors?
 
 ---
 
-## 📞 Next Steps
+## 🎓 Key Learnings
 
-1. **Redeploy** the agent using the notebook
-2. **Test** with your user account (should have HR-only access)
-3. **Report back** what you see:
-   - If you see only HR data → ✅ **SUCCESS!**
-   - If you still see permission errors → Need to debug further
-   - If you see all departments → Check RLS policies and SP permissions
+1. **Read the documentation carefully** - the `client=` parameter was documented all along!
 
----
+2. **Resource declaration ≠ Access control**
+   - Declaring a resource in the list tells Databricks WHAT is needed
+   - Auth policy determines WHO can access it
+   - You CAN declare Genie Space in resources AND use OBO
 
-## 🏆 Why This Will Work
+3. **Genie Space settings matter**
+   - Credential mode must support OBO ("run as viewer")
+   - "Embedded credentials" mode prevents OBO entirely
 
-1. **Direct API Control**: We control exactly which credentials are used
-2. **Explicit OBO Client**: `WorkspaceClient(credentials_strategy=obo_creds)` is explicit
-3. **No Wrapper Interference**: Bypassing GenieAgent removes the black box
-4. **Error Handling**: Supervisor detects and reports errors instead of hallucinating
-5. **Clean Prompts**: No misleading examples in prompts
-
-**This is the correct architectural pattern for OBO + Genie + RLS.**
+4. **Use official wrappers when available**
+   - GenieAgent handles complexity internally
+   - Direct API calls should be last resort
+   - Follow documented patterns
 
 ---
 
-**Commit:** `e8f1d62` (pushed to `main`)  
-**Previous Attempts:** `0f1d338` (thread-local config - didn't work)
+## 🏆 Why This Approach is Correct
+
+1. **✅ Follows official documentation** - Uses `client=` parameter as documented
+2. **✅ Aligns with LangGraph** - Uses official GenieAgent wrapper
+3. **✅ Simpler implementation** - Less custom code to maintain
+4. **✅ Better error handling** - GenieAgent handles edge cases
+5. **✅ Properly declares resources** - Per Databricks requirements
+
+---
+
+**Commit:** `6ec9a98` (pushed to `main`)  
+**Previous commits:**
+- `e8f1d62` - Direct API approach (reverted)
+- `0f1d338` - Thread-local config (didn't work)
+
+---
+
+## ⚠️ BEFORE YOU REDEPLOY
+
+**Check Genie Space credential mode!** This is the most common reason OBO doesn't work with Genie.
+
+If it's set to "embedded credentials," changing the code won't help. The Genie Space itself must be configured to support OBO.
+
+Let me know what the credential mode is set to! 🔍
