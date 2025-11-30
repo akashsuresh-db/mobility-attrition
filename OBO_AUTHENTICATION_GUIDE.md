@@ -1,631 +1,373 @@
-# On-Behalf-Of (OBO) Authentication - Complete Implementation Guide
+# OBO Authentication Implementation Guide
+
+**Last Updated:** Nov 30, 2025  
+**Status:** ✅ **CRITICAL FIX IMPLEMENTED** - Bypassing GenieAgent Wrapper
+
+---
 
 ## 🎯 Executive Summary
 
-**Status:** ✅ **FULLY COMPLIANT** with Databricks OBO Authentication Guidelines
+**Your 3 findings confirmed the root cause:**
 
-This implementation enables **user-specific access to Genie Space**, ensuring each user's queries execute with their own permissions, enforcing Unity Catalog row-level security, and maintaining complete audit trails.
+1. ✅ **Genie using SP credentials** → `PERMISSION_DENIED` errors
+2. ✅ **Supervisor hallucinating** → Fake Sales/Engineering data
+3. ✅ **No authorization prompt** → Normal (consent cached from first deployment)
 
----
-
-## 📋 Table of Contents
-
-1. [The Critical OBO Rule](#the-critical-obo-rule)
-2. [What Changed and Why](#what-changed-and-why)
-3. [Implementation Details](#implementation-details)
-4. [Verification Checklist](#verification-checklist)
-5. [Architecture Diagrams](#architecture-diagrams)
-6. [Testing and Deployment](#testing-and-deployment)
+**Solution:** Bypass the `GenieAgent` wrapper entirely and call Genie API directly with OBO credentials.
 
 ---
 
-## The Critical OBO Rule
+## 🔴 Root Cause Analysis
 
+### The Problem with GenieAgent
+
+```python
+# ❌ GenieAgent from databricks-langchain does NOT support OBO
+GenieAgent(genie_space_id=..., ...)
+    ↓
+    Creates its own internal WorkspaceClient
+    ↓
+    Uses DEFAULT credentials (Service Principal)
+    ↓
+    ❌ Ignores OBO credentials we tried to provide
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                                                                 │
-│  "Because the user's identity is only known at query time,     │
-│   you must access OBO resources inside predict or              │
-│   predict_stream, not in the agent's __init__ method."         │
-│                                                                 │
-│  This ensures that resources are isolated between invocations. │
-│                                                                 │
-│                    - Databricks OBO Documentation               │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
 
-### Why This Matters
+### Failed Attempts (All Unsuccessful)
 
-| Without OBO | With OBO (Correctly Implemented) |
-|-------------|----------------------------------|
-| ❌ All users share same credentials | ✅ Each user has own credentials |
-| ❌ All users see all data | ✅ Users see only their permitted data |
-| ❌ No audit trail of actual users | ✅ Full audit trail per user |
-| ❌ Unity Catalog RLS not enforced | ✅ Row-level security enforced |
-| ❌ Compliance violation | ✅ Compliance certified |
+| Attempt | Method | Result |
+|---------|--------|--------|
+| 1 | Pass `workspace_client` parameter | ❌ TypeError (not accepted) |
+| 2 | Set `DATABRICKS_TOKEN` environment variable | ❌ Still used SP credentials |
+| 3 | Thread-local `Config` with OBO | ❌ Still used SP credentials |
+
+**Conclusion:** `GenieAgent` wrapper is incompatible with OBO authentication.
 
 ---
 
-## What Changed and Why
+## ✅ SOLUTION: Direct Genie API Calls
 
-### 🔴 Initial Implementation (WRONG)
-
-The initial implementation violated OBO guidelines by initializing `ModelServingUserCredentials()` at **module level**:
+### Architecture
 
 ```python
-# ❌ WRONG - Cell 3, Module Level
-client = DatabricksFunctionClient(credentials_provider=ModelServingUserCredentials())
-llm = ChatDatabricks(endpoint=..., credentials_provider=ModelServingUserCredentials())
-supervisor = create_langgraph_with_nodes(llm, EXTERNALLY_SERVED_AGENTS)
-AGENT = LangGraphResponsesAgent(supervisor)
+# ✅ NEW APPROACH: Direct API calls with explicit OBO WorkspaceClient
+
+1. Create OBO credentials
+   obo_creds = ModelServingUserCredentials()
+
+2. Create OBO WorkspaceClient
+   workspace_client = WorkspaceClient(credentials_strategy=obo_creds)
+
+3. Call Genie API directly
+   conversation = workspace_client.genie.start_conversation(
+       space_id=genie_space_id,
+       content=user_question
+   )
+   
+   message = workspace_client.genie.get_message(
+       space_id=space_id,
+       conversation_id=conversation_id,
+       message_id=message_id
+   )
+
+4. Parse response
+   return message.content or attachments
 ```
 
-**Problems:**
-- `ModelServingUserCredentials()` called when `agent.py` loads (deployment time)
-- No user request exists yet → no user context available
-- All users share the same LLM, client, and graph
-- Defeats the entire purpose of OBO authentication!
+### Key Changes Made
 
----
+#### 1. **New Function: `query_genie_with_obo()`**
 
-### ✅ Corrected Implementation (RIGHT)
-
-The corrected implementation defers OBO resource creation to **request time**:
+Created in Cell 3:
 
 ```python
-# ✅ CORRECT - Cell 3, Module Level (Configuration Only)
-LLM_ENDPOINT_NAME = "databricks-gpt-5-nano"
-EXTERNALLY_SERVED_AGENTS = [Genie(...)]
-AGENT = LangGraphResponsesAgent(LLM_ENDPOINT_NAME, EXTERNALLY_SERVED_AGENTS)
-
-# ✅ CORRECT - Cell 3, Inside LangGraphResponsesAgent class
-class LangGraphResponsesAgent(ResponsesAgent):
-    def __init__(self, llm_endpoint_name: str, externally_served_agents: list):
-        # Store config only - NO OBO resources
-        self.llm_endpoint_name = llm_endpoint_name
-        self.externally_served_agents = externally_served_agents
-    
-    def _create_graph_with_obo(self):
-        # OBO resources created HERE (called from predict_stream)
-        client = DatabricksFunctionClient(credentials_provider=ModelServingUserCredentials())
-        set_uc_function_client(client)
-        
-        llm = ChatDatabricks(
-            endpoint=self.llm_endpoint_name,
-            credentials_provider=ModelServingUserCredentials()
-        )
-        
-        return create_langgraph_with_nodes(llm, self.externally_served_agents)
-    
-    def predict_stream(self, request: ResponsesAgentRequest):
-        # Create OBO graph per request - user context available here!
-        agent = self._create_graph_with_obo()
-        
-        for _, events in agent.stream({"messages": cc_msgs}, ...):
-            yield events
-```
-
-**Benefits:**
-- ✅ `ModelServingUserCredentials()` called during request processing
-- ✅ User identity is available from request context
-- ✅ Each user gets isolated credentials and resources
-- ✅ Proper security and compliance
-
----
-
-## Implementation Details
-
-### 1. Package Installation (Cell 1)
-
-```python
-%pip install -U -qqq langgraph-supervisor==0.0.30 \
-    mlflow[databricks] \
-    databricks-langchain \
-    databricks-agents \
-    databricks-ai-bridge \  # ← Required for OBO
-    uv 
-dbutils.library.restartPython()
-```
-
----
-
-### 2. Agent Code Structure (Cell 3)
-
-#### Import OBO Module
-```python
-from databricks_ai_bridge import ModelServingUserCredentials
-```
-
-#### Module-Level Configuration (NO OBO Resources)
-```python
-# Configuration only - no ModelServingUserCredentials() calls here!
-LLM_ENDPOINT_NAME = "databricks-gpt-5-nano"
-
-EXTERNALLY_SERVED_AGENTS = [
-    Genie(
-        space_id="01f0c9f705201d14b364f5daf28bb639",
-        name="talent_genie",
-        description="Analyzes talent stability, mobility patterns..."
-    ),
-]
-
-TOOLS = []
-IN_CODE_AGENTS = []
-```
-
-#### LangGraphResponsesAgent Class
-```python
-class LangGraphResponsesAgent(ResponsesAgent):
+def query_genie_with_obo(workspace_client: WorkspaceClient, space_id: str, question: str) -> str:
     """
-    ResponsesAgent that creates OBO-enabled resources PER REQUEST.
+    Query Genie Space using OBO credentials via direct API call.
     
-    CRITICAL: OBO resources are initialized in predict/predict_stream,
-    NOT in __init__, because user identity is only available at query time.
+    Bypasses GenieAgent wrapper to ensure user credentials are used.
     """
+    # Start conversation
+    conversation = workspace_client.genie.start_conversation(
+        space_id=space_id,
+        content=question
+    )
     
-    def __init__(self, llm_endpoint_name: str, externally_served_agents: list):
-        """Store configuration only - NO OBO resource initialization here!"""
-        self.llm_endpoint_name = llm_endpoint_name
-        self.externally_served_agents = externally_served_agents
-    
-    def _create_graph_with_obo(self):
-        """
-        Create graph with OBO-enabled resources.
-        Called inside predict/predict_stream where user identity is available.
-        """
-        # Create OBO-enabled client
-        client = DatabricksFunctionClient(credentials_provider=ModelServingUserCredentials())
-        set_uc_function_client(client)
-        
-        # Create OBO-enabled LLM
-        llm = ChatDatabricks(
-            endpoint=self.llm_endpoint_name,
-            credentials_provider=ModelServingUserCredentials()
-        )
-        
-        # Create graph with OBO resources
-        graph = create_langgraph_with_nodes(llm, self.externally_served_agents)
-        return graph
-    
-    def predict(self, request: ResponsesAgentRequest):
-        """Predict method - creates OBO graph per request."""
-        outputs = [
-            event.item for event in self.predict_stream(request)
-            if event.type == "response.output_item.done"
-        ]
-        return ResponsesAgentResponse(output=outputs, custom_outputs=request.custom_inputs)
-    
-    def predict_stream(self, request: ResponsesAgentRequest):
-        """Streaming predict - creates OBO graph per request."""
-        # Create OBO-enabled graph for THIS request with THIS user's credentials
-        agent = self._create_graph_with_obo()
-        
-        cc_msgs = to_chat_completions_input([i.model_dump() for i in request.input])
-        seen_ids = set()
-        
-        for _, events in agent.stream({"messages": cc_msgs}, stream_mode=["updates"]):
-            # Process and yield events...
-            yield events
+    # Poll for results (with 60s timeout)
+    # Returns response text or error message
 ```
 
-#### Module-Level Initialization
+#### 2. **Updated `create_langgraph_with_nodes()`**
+
 ```python
-# Create agent instance with configuration only
-AGENT = LangGraphResponsesAgent(LLM_ENDPOINT_NAME, EXTERNALLY_SERVED_AGENTS)
-mlflow.models.set_model(AGENT)
+# OLD (used GenieAgent wrapper)
+def create_langgraph_with_nodes(llm, externally_served_agents):
+    genie_agent = GenieAgent(...)  # ❌ Uses SP credentials
+    
+# NEW (accepts OBO workspace client)
+def create_langgraph_with_nodes(llm, workspace_client, externally_served_agents):
+    genie_space_id = agent.space_id  # ✅ Just store config
 ```
 
----
-
-### 3. MLflow Logging with Auth Policy (Cell 11)
+#### 3. **Simplified `genie_node()`**
 
 ```python
-from mlflow.models.auth_policy import AuthPolicy, SystemAuthPolicy, UserAuthPolicy
-
-# Declare all resources
-resources = [
-    DatabricksServingEndpoint(endpoint_name=LLM_ENDPOINT_NAME),
-    DatabricksSQLWarehouse(warehouse_id="148ccb90800933a1"),
-    DatabricksTable(table_name="akash_s_demo.talent.fact_attrition_snapshots"),
-    DatabricksTable(table_name="akash_s_demo.talent.dim_employees"),
-    DatabricksTable(table_name="akash_s_demo.talent.fact_compensation"),
-    DatabricksTable(table_name="akash_s_demo.talent.fact_performance"),
-    DatabricksTable(table_name="akash_s_demo.talent.fact_role_history"),
-    DatabricksGenieSpace(genie_space_id="01f0c9f705201d14b364f5daf28bb639"),
-]
-
-# Configure OBO authentication policies
-systemAuthPolicy = SystemAuthPolicy(resources=resources)
-
-userAuthPolicy = UserAuthPolicy(
-    api_scopes=[
-        "serving.serving-endpoints",     # For LLM endpoint access
-        "sql.warehouses",                # For Genie SQL warehouse queries
-        "sql.statement-execution",       # For executing SQL queries on tables
-    ]
-)
-
-# Log model with OBO authentication
-# Note: Don't pass resources separately - they're already in SystemAuthPolicy
-with mlflow.start_run():
-    logged_agent_info = mlflow.pyfunc.log_model(
-        name="agent",
-        python_model="agent.py",
-        auth_policy=AuthPolicy(
-            system_auth_policy=systemAuthPolicy,
-            user_auth_policy=userAuthPolicy
-        ),
-        pip_requirements=[
-            f"databricks-connect=={get_distribution('databricks-connect').version}",
-            f"mlflow=={get_distribution('mlflow').version}",
-            f"databricks-langchain=={get_distribution('databricks-langchain').version}",
-            f"langgraph=={get_distribution('langgraph').version}",
-            f"langgraph-supervisor=={get_distribution('langgraph-supervisor').version}",
-            "databricks-ai-bridge",  # Required for OBO
-        ],
+# OLD (used GenieAgent wrapper)
+def genie_node(state):
+    response = genie_agent.invoke({"messages": messages})  # ❌
+    
+# NEW (direct API call)
+def genie_node(state):
+    user_question = extract_user_question(messages)
+    genie_response = query_genie_with_obo(
+        workspace_client=workspace_client,  # ✅ OBO credentials
+        space_id=genie_space_id,
+        question=user_question
     )
 ```
 
+#### 4. **Fixed Hallucination in `supervisor_summarizer()`**
+
+```python
+# Added error detection BEFORE calling LLM
+if any(error_keyword in genie_response for error_keyword in 
+       ["Error", "PERMISSION_DENIED", "FAILED", "failed with error"]):
+    return {"messages": [AIMessage(
+        content="I apologize, but I don't have access to the requested data..."
+    )]}
+
+# Removed misleading EXAMPLE from prompt
+# OLD: Had Sales/Engineering example → LLM used it when Genie failed ❌
+# NEW: No examples, explicit instruction to use only provided data ✅
+```
+
+#### 5. **Simplified `_create_graph_with_obo()`**
+
+```python
+# OLD (complex thread-local config manipulation)
+config = Config(credentials_strategy=obo_creds)
+threading.current_thread()._databricks_config = config
+try:
+    graph = create_langgraph_with_nodes(llm, agents)
+finally:
+    # Restore config...
+
+# NEW (simple and explicit)
+workspace_client = WorkspaceClient(credentials_strategy=obo_creds)
+graph = create_langgraph_with_nodes(llm, workspace_client, agents)
+```
+
 ---
 
-## Verification Checklist
+## 📋 What You Need to Do Next
 
-### ✅ 10-Point Compliance Checklist
+### Step 1: Redeploy the Agent
 
-| # | Requirement | Status | Evidence |
-|---|-------------|--------|----------|
-| 1 | Import `ModelServingUserCredentials` | ✅ PASS | `from databricks_ai_bridge import ModelServingUserCredentials` |
-| 2 | NO `ModelServingUserCredentials()` at module level | ✅ PASS | Only config stored at module scope |
-| 3 | NO `ModelServingUserCredentials()` in `__init__()` | ✅ PASS | Only stores config parameters |
-| 4 | YES `ModelServingUserCredentials()` in request method | ✅ PASS | Called in `_create_graph_with_obo()` |
-| 5 | New graph per request | ✅ PASS | `_create_graph_with_obo()` called per request |
-| 6 | `AuthPolicy` configured | ✅ PASS | System + User policies in MLflow logging |
-| 7 | `databricks-ai-bridge` dependency | ✅ PASS | In Cell 1 + pip_requirements |
-| 8 | LLM with OBO | ✅ PASS | `ChatDatabricks` with `credentials_provider` |
-| 9 | Client with OBO | ✅ PASS | `DatabricksFunctionClient` with `credentials_provider` |
-| 10 | Resources declared | ✅ PASS | All resources in auth policy |
+Run the notebook cells in Databricks:
 
-### Quick Visual Check
-
+```python
+# Cell 11: Log the model
+# Cell 12: Register the model
+# Cell 13: Deploy to serving endpoint
 ```
-Where is ModelServingUserCredentials() called?
 
-❌ Module Level:        NO  (only config stored)
-❌ __init__():          NO  (only stores strings)
-✅ _create_graph_with_obo():  YES  (called from predict_stream)
-✅ predict_stream():    YES  (calls _create_graph_with_obo)
+### Step 2: Verify OBO is Working
+
+**Test Query:**
 ```
+"Show me all the BUs which employees are part of"
+```
+
+**Expected Results (with your user who has RLS on HR department):**
+
+✅ **SUCCESS:**
+- Response contains ONLY HR department data
+- NO `PERMISSION_DENIED` errors
+- NO hallucinated Sales/Engineering data
+
+❌ **STILL BROKEN:**
+- `PERMISSION_DENIED: Failed to fetch tables`
+- Shows all departments instead of just HR
+- Returns fake data
+
+### Step 3: Manual Cleanup (Optional but Recommended)
+
+**Remove Service Principal from Genie Space:**
+
+1. Go to Databricks workspace
+2. Navigate to your Genie Space
+3. Settings → Permissions
+4. Remove the service principal that was added
+5. Ensure only your user account has access
+
+**Why?** The SP should NOT have Genie Space access. Access should only happen via OBO user credentials.
 
 ---
 
-## Architecture Diagrams
+## 🔍 Validation Checklist
 
-### ❌ Wrong Implementation (Before Fix)
+After redeployment, verify:
+
+- [ ] Querying returns filtered data (only HR department for your user)
+- [ ] No `PERMISSION_DENIED` errors in response
+- [ ] No hallucinated data (Sales, Engineering, etc.)
+- [ ] Response says "I apologize, but I don't have access..." if user truly has no access
+- [ ] Different users get different data based on their RLS permissions
+
+---
+
+## 🏗️ Architecture Diagram
 
 ```
-Module loads (deployment time)
+User Query
     ↓
-ModelServingUserCredentials() called ← NO USER CONTEXT! ❌
+Model Serving Endpoint (receives query)
     ↓
-LLM + Client + Graph created once
+predict() method
     ↓
-┌─────────────────────────────────┐
-│  All requests use same graph    │
-│  All users share same resources │ ← SECURITY ISSUE ❌
-└─────────────────────────────────┘
+_create_graph_with_obo()
     ↓
-User A sees all data
-User B sees all data
-User C sees all data
-```
-
----
-
-### ✅ Correct Implementation (After Fix)
-
-```
-Module loads (deployment time)
+ModelServingUserCredentials()  ← Captures USER identity from request
     ↓
-Store configuration only (no OBO resources)
+WorkspaceClient(credentials_strategy=obo_creds)  ← OBO client
     ↓
-┌────────────────────────────────────────────────────────────┐
-│                                                            │
-│  User A Request              User B Request               │
-│       ↓                           ↓                        │
-│  predict_stream()            predict_stream()             │
-│       ↓                           ↓                        │
-│  _create_graph_with_obo()    _create_graph_with_obo()     │
-│       ↓                           ↓                        │
-│  ModelServingUserCredentials()           ModelServingUserCredentials()            │
-│  (captures User A)           (captures User B)            │
-│       ↓                           ↓                        │
-│  Create Graph A              Create Graph B               │
-│  with A's credentials        with B's credentials         │
-│       ↓                           ↓                        │
-│  Query as User A             Query as User B              │
-│       ↓                           ↓                        │
-│  Return A's data ✅          Return B's data ✅           │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
+genie_node()
+    ↓
+query_genie_with_obo(workspace_client, space_id, question)
+    ↓
+workspace_client.genie.start_conversation(...)  ← Uses USER credentials
+    ↓
+Genie Space queries Unity Catalog tables
+    ↓
+Unity Catalog applies RLS based on USER identity
+    ↓
+Returns filtered data to user
 ```
 
 ---
 
-### Request Flow Timeline
+## 📊 Before vs After
 
-```
-Step 1: User sends request to agent endpoint
-        ↓
-Step 2: Databricks captures user identity from token
-        ↓
-Step 3: predict_stream(request) invoked
-        ✅ User identity IS available in request context
-        ↓
-Step 4: _create_graph_with_obo() called
-        ↓
-Step 5: ModelServingUserCredentials() executed
-        ✅ Captures current user's identity from request
-        ↓
-Step 6: Create OBO resources with user credentials
-        • DatabricksFunctionClient(credentials_provider=ModelServingUserCredentials())
-        • ChatDatabricks(credentials_provider=ModelServingUserCredentials())
-        • Graph with OBO-enabled LLM and client
-        ↓
-Step 7: Execute Genie query with user's permissions
-        ✅ SQL warehouse access as user
-        ✅ Unity Catalog RLS enforced
-        ✅ Only permitted data returned
-        ↓
-Step 8: LLM summarization with user's credentials
-        ↓
-Step 9: Return user-specific results
-        ✅ Audit log shows actual user
-        ✅ Compliance maintained
+| Aspect | BEFORE (GenieAgent) | AFTER (Direct API) |
+|--------|---------------------|-------------------|
+| **Genie Access** | GenieAgent wrapper | Direct API calls |
+| **Credentials** | Service Principal (SP) | User (OBO) |
+| **RLS Enforcement** | ❌ No (SP sees all) | ✅ Yes (user filtered) |
+| **Permission Errors** | ✅ Got errors | ❌ Should work |
+| **Hallucination** | ✅ Returned fake data | ❌ Returns error message |
+| **Authorization Prompt** | First time only | Cached (normal) |
+
+---
+
+## 🐛 Troubleshooting
+
+### Issue 1: Still Getting Permission Denied
+
+**Possible Causes:**
+1. Old model version still deployed
+2. Endpoint didn't pick up new version
+
+**Solution:**
+```python
+# Check deployed version
+deployment_info = agents.get_deployment_info(UC_MODEL_NAME)
+print(f"Deployed version: {deployment_info.version}")
+
+# Ensure it matches the latest version you registered
 ```
 
+### Issue 2: Still Seeing All Data (No RLS)
+
+**Possible Causes:**
+1. Service principal still has table access
+2. RLS policies not configured correctly
+
+**Solution:**
+1. Remove SP from Genie Space permissions (UI)
+2. Verify RLS policies on tables:
+   ```sql
+   SHOW ROW FILTERS ON TABLE akash_s_demo.talent.dim_employees;
+   ```
+
+### Issue 3: Still Seeing Fake Sales/Engineering Data
+
+**Possible Causes:**
+1. Old cached response
+2. LLM still using examples from memory
+
+**Solution:**
+1. Clear browser cache
+2. Ask a completely different question
+3. Check logs to see if Genie actually returned an error
+
 ---
 
-## Testing and Deployment
+## 📝 Code Reference
 
-### How to Verify OBO is Working
+### Key Files Modified
 
-#### Test 1: Different Users, Different Data
+1. **Cell 3** (`%%writefile agent.py`):
+   - Added `query_genie_with_obo()` function
+   - Modified `create_langgraph_with_nodes()` to accept `workspace_client`
+   - Modified `genie_node()` to use direct API
+   - Modified `supervisor_summarizer()` to detect errors and prevent hallucination
+   - Modified `_create_graph_with_obo()` to create and pass OBO workspace client
 
-**User A (Sales Manager)** - Limited to Sales department:
-```bash
-curl -X POST https://<endpoint>/invocations \
-  -H "Authorization: Bearer <USER_A_TOKEN>" \
-  -d '{"input": [{"role": "user", "content": "Show attrition rates"}]}'
+2. **Cell 5** (Visualization):
+   - Updated to pass temporary workspace client for graph visualization
 
-# Expected: Only Sales department data
+3. **Cell 11** (MLflow Logging):
+   - Resources: Only infrastructure (endpoint, warehouse)
+   - `DatabricksGenieSpace` and `DatabricksTable` removed from `SystemAuthPolicy`
+   - UserAuthPolicy includes `dashboards.genie` scope
+
+---
+
+## 🎉 Expected Outcome
+
+After redeployment and testing:
+
+**User Query:** "Show me all the BUs which employees are part of"
+
+**Response (with RLS on HR department):**
+
+```
+Based on the available data, employees are currently assigned to the HR department.
+This represents the accessible organizational structure for your view.
+
+| Department | Employee Count |
+|------------|----------------|
+| HR         | 45             |
 ```
 
-**User B (HR Admin)** - Access to all departments:
-```bash
-curl -X POST https://<endpoint>/invocations \
-  -H "Authorization: Bearer <USER_B_TOKEN>" \
-  -d '{"input": [{"role": "user", "content": "Show attrition rates"}]}'
-
-# Expected: All departments data
-```
-
-#### Test 2: Audit Logs
-
-Check Databricks audit logs - you should see:
-- ✅ Separate entries for User A and User B
-- ✅ Queries attributed to actual users
-- ✅ Different data access patterns
-
-#### Test 3: Unity Catalog Enforcement
-
-If row-level security is configured:
-- ✅ User A cannot access User B's rows
-- ✅ Queries are filtered automatically
-- ✅ No data leakage between users
+**NOT:**
+- ❌ Permission denied errors
+- ❌ Sales, Engineering, or other departments
+- ❌ Fake hallucinated data
 
 ---
 
-### Deployment Steps
+## 📞 Next Steps
 
-1. **Update Configuration** (if needed)
-   - Genie Space ID (Cell 3, line ~580)
-   - SQL Warehouse ID (Cell 11, line ~763)
-   - Table names (Cell 11, lines ~764-768)
-
-2. **Run Cell 1**: Install dependencies including `databricks-ai-bridge`
-
-3. **Run Cell 3**: Generate `agent.py` with OBO implementation
-
-4. **Run Cells 8-9**: Test locally (optional)
-
-5. **Run Cell 11**: Log model with auth policy
-
-6. **Run Cell 13**: Register to Unity Catalog
-
-7. **Run Cell 15**: Deploy to serving endpoint
+1. **Redeploy** the agent using the notebook
+2. **Test** with your user account (should have HR-only access)
+3. **Report back** what you see:
+   - If you see only HR data → ✅ **SUCCESS!**
+   - If you still see permission errors → Need to debug further
+   - If you see all departments → Check RLS policies and SP permissions
 
 ---
 
-### Deployment Checklist
+## 🏆 Why This Will Work
 
-Before deploying, verify:
+1. **Direct API Control**: We control exactly which credentials are used
+2. **Explicit OBO Client**: `WorkspaceClient(credentials_strategy=obo_creds)` is explicit
+3. **No Wrapper Interference**: Bypassing GenieAgent removes the black box
+4. **Error Handling**: Supervisor detects and reports errors instead of hallucinating
+5. **Clean Prompts**: No misleading examples in prompts
 
-- [ ] `databricks-ai-bridge` installed
-- [ ] `ModelServingUserCredentials` imported but not called at module level
-- [ ] `_create_graph_with_obo()` creates OBO resources
-- [ ] `predict_stream()` calls `_create_graph_with_obo()`
-- [ ] `auth_policy` configured in MLflow logging
-- [ ] All resources declared in `resources` list
-- [ ] API scopes configured in `UserAuthPolicy`
-- [ ] Tested with multiple users (if possible)
+**This is the correct architectural pattern for OBO + Genie + RLS.**
 
 ---
 
-## Summary of Changes
-
-### Files Modified
-
-| File | Cell | Change | Purpose |
-|------|------|--------|---------|
-| **langgraph-agent-with-summary.ipynb** | Cell 1 | Added `databricks-ai-bridge` | OBO library dependency |
-| | Cell 3 | Removed module-level `ModelServingUserCredentials()` | Defer to request time |
-| | Cell 3 | Modified `LangGraphResponsesAgent.__init__()` | Store config only |
-| | Cell 3 | Added `_create_graph_with_obo()` method | Create OBO resources per request |
-| | Cell 3 | Modified `predict_stream()` | Call `_create_graph_with_obo()` |
-| | Cell 5 | Updated visualization code | Work without OBO |
-| | Cell 11 | Added auth policy imports | OBO configuration |
-| | Cell 11 | Added `SystemAuthPolicy` | System resource access |
-| | Cell 11 | Added `UserAuthPolicy` | User API scopes |
-| | Cell 11 | Added `auth_policy` parameter | Enable OBO in deployment |
-| | Cell 11 | Added `databricks-ai-bridge` to pip | Runtime dependency |
-
----
-
-### Key Architecture Changes
-
-| Aspect | Before | After |
-|--------|--------|-------|
-| **OBO Initialization** | Module level | Request level |
-| **Resource Sharing** | Shared graph | Per-request graph |
-| **User Identity** | Not captured | Captured from request |
-| **Credentials** | Static | Dynamic per user |
-| **Security** | All users same data | User-specific data |
-| **Compliance** | Non-compliant | Fully compliant |
-
----
-
-## Benefits of This Implementation
-
-### Security
-- ✅ Each user executes queries with their own permissions
-- ✅ No credential sharing between users
-- ✅ Unity Catalog row-level security enforced
-- ✅ No data leakage between users
-
-### Compliance
-- ✅ Full audit trail showing actual users
-- ✅ Meets data governance requirements
-- ✅ Complies with Databricks OBO guidelines
-- ✅ Supports compliance reporting
-
-### Governance
-- ✅ Genie Space access controlled per user
-- ✅ SQL warehouse queries run as actual user
-- ✅ Unity Catalog policies fully enforced
-- ✅ Table access respects user permissions
-
----
-
-## Troubleshooting
-
-### Issue: "ModelServingUserCredentials not found"
-**Solution:** Ensure `databricks-ai-bridge` is installed (Cell 1)
-
-### Issue: "Only one of `resources`, and `auth_policy` can be specified"
-**Solution:** Don't pass both `resources` and `auth_policy` to `log_model()`. When using `auth_policy`, the resources are already included in `SystemAuthPolicy(resources=resources)`. Remove the `resources=resources` parameter.
-
-### Issue: "Invalid user API scope(s) specified"
-**Solution:** Use the correct API scopes. Valid scopes include:
-- `serving.serving-endpoints` (for LLM endpoints)
-- `sql.warehouses` (NOT `sql.sql-warehouses`)
-- `sql.statement-execution` (NOT `catalog.catalog-tables`)
-- `mcp.genie` (for Genie spaces)
-- See the error message for the full list of allowed scopes
-
-### Issue: "All users see same data"
-**Solution:** Verify `_create_graph_with_obo()` is called from `predict_stream()`, not at module level
-
-### Issue: "Auth policy error during deployment"
-**Solution:** Check that all resources are declared and auth_policy is configured in Cell 11
-
-### Issue: "Graph visualization fails"
-**Solution:** Cell 5 creates a temporary non-OBO graph just for visualization - this is expected
-
----
-
-## Final Verification
-
-✅ **CONFIRMED: This implementation is 100% compliant with Databricks OBO authentication guidelines.**
-
-### Ready for Production? YES! ✅
-
-- ✅ OBO resources initialized at request time
-- ✅ User identity captured from request context
-- ✅ Each user gets isolated credentials
-- ✅ Auth policy properly configured
-- ✅ All dependencies included
-- ✅ Resources fully declared
-
-**Your agent is ready for deployment with user-specific Genie Space access!** 🚀
-
-
----
-
-## 🧪 Implementation Validation (via Databricks Connect)
-
-This OBO implementation has been validated using Databricks Connect on serverless compute.
-
-### Validation Results ✅
-
-**Connection Test:**
-- ✅ Connected to workspace as `akash.s@databricks.com`
-- ✅ Serverless compute accessible
-- ✅ Can execute Python code remotely
-
-**Code Structure Validation:**
-- ✅ `agent.py` generated successfully (23,851 bytes, 592 lines)
-- ✅ Valid Python syntax confirmed
-- ✅ All OBO imports present
-- ✅ `ModelServingUserCredentials` correctly imported
-- ✅ `WorkspaceClient` imported
-- ✅ `_create_graph_with_obo()` method present
-- ✅ Token extraction: `obo_token = obo_creds.token()`
-- ✅ Environment setting: `os.environ['DATABRICKS_TOKEN'] = obo_token`
-- ✅ Token restoration in `finally` block
-
-**API Scopes Validation:**
-- ✅ `serving.serving-endpoints` - LLM endpoint access
-- ✅ `sql.warehouses` - SQL warehouse access
-- ✅ `sql.statement-execution` - Execute SQL queries
-- ✅ `dashboards.genie` - Genie Space access (CRITICAL)
-
-### Status: PRODUCTION-READY 🚀
-
-All OBO patterns follow Databricks documentation correctly. The implementation is ready for deployment.
-
----
-
-## 📊 Final Pre-Deployment Checklist
-
-Before deploying, verify:
-
-- [ ] Run Cell 3 in Databricks notebook (generates `agent.py`)
-- [ ] Run Cell 11 (logs model with OBO auth policy)
-- [ ] Run Cell 13 (registers to Unity Catalog)
-- [ ] **CRITICAL:** Remove service principal from Genie Space permissions (see below)
-- [ ] Grant Genie Space access to actual users ("Can use" permission)
-- [ ] Set Genie Space sharing to "Run as viewer" (for RLS)
-- [ ] Configure RLS on Unity Catalog tables
-- [ ] Run Cell 15 (deploy to serving endpoint)
-- [ ] Test with different users to verify RLS enforcement
-
-### 🚨 CRITICAL: Remove Service Principal from Genie Space
-
-**Why this matters:**
-- If the service principal has access to Genie Space, the agent will use it
-- This bypasses OBO and shows ALL data (no RLS)
-- The service principal should NOT be in Genie Space permissions
-
-**Steps:**
-1. Go to **Genie Spaces** → Your space (01f0c9f705201d14b364f5daf28bb639)
-2. Click **"Permissions"** or **"Share"**
-3. **Remove** the service principal (looks like: `agents_akash_s_demo-talent-talent_agent_v1`)
-4. Ensure sharing mode is **"Run as viewer"**
-5. Only add actual users who need access
-
-**Result:** Agent will be forced to use user credentials via OBO, enforcing RLS!
-
----
-
-**End of OBO Authentication Guide**
+**Commit:** `e8f1d62` (pushed to `main`)  
+**Previous Attempts:** `0f1d338` (thread-local config - didn't work)
