@@ -63,7 +63,9 @@ This ensures the app runs the web UI (`app.py`), not the agent code (`agent.py`)
 4. **Required API Scopes for this app:**
    - `iam.current-user:read` (default)
    - `iam.access-control:read` (default)
-   - **Additional scopes may be auto-requested when calling the agent**
+   - **`serving.serving-endpoints`** ← **CRITICAL! Required to call agent endpoint**
+   
+   **Without this scope, you'll get: "Invalid scope" error!**
 
 ---
 
@@ -188,7 +190,30 @@ Expected: Only Sales department
 
 ## 🐛 Troubleshooting
 
-### Issue 1: "Using OBO token: No"
+### Issue 1: "Invalid scope" Error When Calling Agent
+
+**Error message:**
+```
+⚠️ Permission Error: Your account doesn't have access to the agent endpoint.
+Technical details: Invalid scope
+```
+
+**Cause:** App doesn't have `serving.serving-endpoints` scope to call the agent on behalf of users.
+
+**Fix:**
+1. Go to Databricks Apps → Your app → Settings
+2. Find "API Scopes" section
+3. Add scope: `serving.serving-endpoints`
+4. Redeploy/restart app
+5. In app.py, change `use_obo = True`
+
+**Temporary workaround:** 
+- In app.py, set `use_obo = False` to use app token instead of user token
+- This works but RLS won't be enforced (all users see all data)
+
+---
+
+### Issue 2: "Using OBO token: No"
 
 **Cause:** User authorization not enabled in Databricks Apps
 
