@@ -216,6 +216,38 @@ def get_agent_response(conversation_history, user_token=None):
         if user_token:
             print(f"Using OBO - calling endpoint with user token")
             auth_token = user_token
+            
+            # DEBUG: Decode token and check scopes (per internal doc)
+            try:
+                import jwt
+                decoded = jwt.decode(auth_token, options={"verify_signature": False})
+                scopes = decoded.get("scp") or decoded.get("scope") or "NO_SCOPES_FOUND"
+                print(f"🔍 Token scopes: {scopes}")
+                
+                # Check for required scope
+                if isinstance(scopes, str):
+                    scope_list = scopes.split()
+                elif isinstance(scopes, list):
+                    scope_list = scopes
+                else:
+                    scope_list = []
+                
+                has_serving = "serving.serving-endpoints" in scope_list
+                has_genie = "dashboards.genie" in scope_list
+                
+                print(f"✓ Has serving.serving-endpoints: {has_serving}")
+                print(f"✓ Has dashboards.genie: {has_genie}")
+                
+                if not has_serving:
+                    print("⚠️ WARNING: Token missing 'serving.serving-endpoints' scope!")
+                    print("   This will cause 403 Invalid scope error.")
+                    print("   Fix: Enable 'Model Serving endpoints' in app User Authorization")
+                if not has_genie:
+                    print("⚠️ WARNING: Token missing 'dashboards.genie' scope!")
+                    print("   Agent will fail to access Genie Space for RLS.")
+                    print("   Fix: Enable 'Genie spaces' in app User Authorization")
+            except Exception as e:
+                print(f"⚠️ Failed to decode token for scope check: {e}")
         else:
             print(f"Using app token - calling endpoint with service principal")
             auth_token = get_databricks_token()
