@@ -685,11 +685,13 @@ def update_chat(send_clicks, clear_clicks, n_submit, user_message, conversation_
         print(f"Processing request for user: {user_email}")
         print(f"Using OBO token: {'Yes' if user_token else 'No (fallback to app token)'}")
         
-        # TEMPORARY: Disable OBO for testing (use app token instead)
-        # TODO: Enable OBO after adding 'serving.serving-endpoints' scope in app settings
-        use_obo = False  # Set to True after adding scope
+        # OBO is enabled - scopes configured in Databricks Apps settings:
+        # - dashboards.genie
+        # - serving.serving-endpoints (for calling agent endpoint)
+        # - sql, catalog.* (for data access)
+        use_obo = True  # ✅ Scopes added in app settings
         
-        # Get agent response with user's token (if OBO enabled)
+        # Get agent response with user's token (enables RLS)
         agent_response = get_agent_response(
             conversation_history, 
             user_token=user_token if use_obo else None
