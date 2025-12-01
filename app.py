@@ -246,6 +246,25 @@ def get_agent_response(conversation_history, user_token=None):
                     print("⚠️ WARNING: Token missing 'dashboards.genie' scope!")
                     print("   Agent will fail to access Genie Space for RLS.")
                     print("   Fix: Enable 'Genie spaces' in app User Authorization")
+                
+                # If critical scopes are missing, return helpful error immediately
+                if not has_serving or not has_genie:
+                    return (
+                        "⚠️ **Token Missing Required Scopes**\n\n"
+                        "Your access token doesn't have the required permissions to use this agent.\n\n"
+                        "**Missing scopes:**\n"
+                        f"{'- Model Serving Endpoints' if not has_serving else ''}\n"
+                        f"{'- Genie Spaces' if not has_genie else ''}\n\n"
+                        "**To fix this:**\n"
+                        "1. Close this browser tab\n"
+                        "2. Clear your browser cache (or use incognito/private mode)\n"
+                        "3. Open the app again\n"
+                        "4. You should see an authorization screen asking for permissions\n"
+                        "5. Click 'Authorize' to grant the required scopes\n\n"
+                        "**If you don't see the authorization screen:**\n"
+                        "Contact your admin to enable 'Model Serving endpoints' and 'Genie spaces' "
+                        "in the app's User Authorization settings."
+                    )
             except Exception as e:
                 print(f"⚠️ Failed to decode token for scope check: {e}")
         else:
