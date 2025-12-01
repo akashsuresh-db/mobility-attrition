@@ -209,50 +209,105 @@ def get_agent_response(conversation_history, user_token=None):
                     execute queries on behalf of the user (RLS enforced).
     """
     try:
-        client = get_client(user_token=user_token)
+        import requests
+        import os
         
-        # Call the agent endpoint
-        print(f"Calling agent with history: {len(conversation_history)} messages")
-        response = client.responses.create(
-            model=MODEL_NAME,
-            input=conversation_history
-        )
+        # Determine which token to use
+        if user_token:
+            print(f"Using OBO - calling endpoint with user token")
+            auth_token = user_token
+        else:
+            print(f"Using app token - calling endpoint with service principal")
+            auth_token = get_databricks_token()
         
-        # Debug: Print raw response structure
-        print(f"Response object type: {type(response)}")
-        print(f"Response output: {response.output if hasattr(response, 'output') else 'No output attr'}")
+        # Build endpoint URL
+        host = os.environ.get('DATABRICKS_SERVER_HOSTNAME')
+        if not host:
+            # Extract from BASE_URL if env var not set
+            host = BASE_URL.replace('https://', '').replace('/serving-endpoints', '')
         
-        # Extract text from response - join with newlines to preserve structure
+        # Use Agent Framework API (responses endpoint)
+        url = f"https://{host}/serving-endpoints/{MODEL_NAME}/invocations"
+        
+        # Call the agent endpoint with proper Authorization header
+        print(f"Calling agent at: {url}")
+        print(f"With {len(conversation_history)} messages in history")
+        
+        headers = {
+            "Authorization": f"Bearer {auth_token}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "messages": conversation_history
+        }
+        
+        response = requests.post(url, headers=headers, json=payload, timeout=60)
+        response.raise_for_status()  # Raise exception for HTTP errors
+        
+        # Parse JSON response
+        response_json = response.json()
+        print(f"Response status: {response.status_code}")
+        print(f"Response JSON keys: {response_json.keys() if isinstance(response_json, dict) else 'Not a dict'}")
+        
+        # Extract text from Agent Framework response format
         response_parts = []
-        for output in response.output:
-            print(f"Output type: {type(output)}, Output: {output}")
-            for content in getattr(output, "content", []):
-                print(f"Content type: {type(content)}, Content: {content}")
-                text = getattr(content, "text", "")
-                print(f"Extracted text: '{text}'")
-                if text and text.strip():
-                    response_parts.append(text.strip())
+        
+        # Agent Framework returns choices with messages
+        if "choices" in response_json:
+            for choice in response_json["choices"]:
+                if "message" in choice and "content" in choice["message"]:
+                    content = choice["message"]["content"]
+                    if content and content.strip():
+                        response_parts.append(content.strip())
+        # Or direct output format
+        elif "output" in response_json:
+            for output_item in response_json["output"]:
+                if "content" in output_item:
+                    for content_item in output_item["content"]:
+                        if "text" in content_item:
+                            text = content_item["text"]
+                            if text and text.strip():
+                                response_parts.append(text.strip())
+        # Fallback: direct text response
+        elif "response" in response_json:
+            response_parts.append(str(response_json["response"]))
         
         response_text = "\n".join(response_parts)
         print(f"Final response text length: {len(response_text)}")
-        print(f"Final response text: '{response_text}'")
+        print(f"Final response text preview: '{response_text[:200]}'")
         
         if not response_text.strip():
             return "⚠️ I received your message but got an empty response from the agent. This could mean:\n\n1. The agent endpoint is running but not processing queries correctly\n2. There might be an issue with the data sources or permissions\n3. The query might need to be rephrased\n\nPlease try rephrasing your question or check the agent endpoint logs."
         
         return response_text
         
+    except requests.exceptions.HTTPError as e:
+        # HTTP error from endpoint
+        error_msg = f"HTTP Error: {e.response.status_code if hasattr(e, 'response') else 'unknown'}"
+        print(f"ERROR: {error_msg}")
+        print(f"Response text: {e.response.text if hasattr(e, 'response') else 'N/A'}")
+        
+        if hasattr(e, 'response') and e.response.status_code == 403:
+            return (
+                f"⚠️ Permission Error: Access denied to the agent endpoint.\n\n"
+                f"This could mean:\n"
+                f"1. Invalid scope - token doesn't have required permissions\n"
+                f"2. User doesn't have 'Can Query' permission on endpoint\n\n"
+                f"Technical details: {str(e)}"
+            )
+        return f"Request failed: {str(e)}"
+    except requests.exceptions.Timeout:
+        return "⚠️ Request timed out. The agent took too long to respond. Please try again."
+    except requests.exceptions.RequestException as e:
+        # Other requests errors
+        print(f"ERROR: Request exception: {str(e)}")
+        return f"Connection Error: {str(e)}"
     except ValueError as e:
-        # Authentication/configuration error
+        # JSON parsing or configuration error
         error_msg = f"Configuration Error: {str(e)}"
         print(f"ERROR: {error_msg}")
         return error_msg
-    except AttributeError as e:
-        # Response structure error
-        return f"Response Format Error: {str(e)}. The agent response format may have changed."
-    except TypeError as e:
-        # Type error (like the proxies issue)
-        return f"Client Error: {str(e)}. Please check the OpenAI SDK version."
     except Exception as e:
         # General error with more details
         import traceback
