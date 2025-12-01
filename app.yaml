@@ -1,0 +1,13 @@
+# Databricks App Configuration
+# Minimal configuration for Databricks Apps
+
+# Command to start the application
+# CRITICAL: Must be "app.py" for the web UI, NOT "agent.py"
+command:
+  - python
+  - app.py
+
+# Environment variables (optional - Databricks sets these automatically)
+# env:
+#   - name: PORT
+#     value: "8080"
