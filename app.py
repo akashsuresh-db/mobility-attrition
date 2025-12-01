@@ -271,9 +271,14 @@ def get_agent_response(conversation_history, user_token=None):
         }
         
         # Agent Framework expects "input" not "messages"
-        # Convert OpenAI-style messages to Agent Framework format
+        # Per internal doc: use Agent Framework schema with "input" field
         payload = {
-            "input": conversation_history
+            "input": conversation_history,
+            # Optional: Add metadata for better tracking and debugging
+            "metadata": {
+                "user": request.headers.get('X-Forwarded-Email', 'unknown'),
+                "source": "databricks_app"
+            }
         }
         
         response = requests.post(url, headers=headers, json=payload, timeout=60)
