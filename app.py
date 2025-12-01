@@ -270,8 +270,10 @@ def get_agent_response(conversation_history, user_token=None):
             "Content-Type": "application/json"
         }
         
+        # Agent Framework expects "input" not "messages"
+        # Convert OpenAI-style messages to Agent Framework format
         payload = {
-            "messages": conversation_history
+            "input": conversation_history
         }
         
         response = requests.post(url, headers=headers, json=payload, timeout=60)
