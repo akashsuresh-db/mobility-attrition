@@ -1,0 +1,20 @@
+# Databricks App Configuration
+# This file defines how your Databricks App should be deployed and run
+
+# CRITICAL: Command to start the app
+# Must point to app.py (Dash/Flask web UI), NOT agent.py (MLflow agent)
+command: ["python", "app.py"]
+
+# App metadata
+name: "Talent Attrition Chatbot"
+description: "Interactive chatbot with OBO authentication for talent analytics"
+
+# Environment configuration
+env:
+  # These are automatically set by Databricks Apps for the app's service principal
+  # - DATABRICKS_CLIENT_ID
+  # - DATABRICKS_CLIENT_SECRET
+  
+  # Port for the Flask server (Dash uses Flask underneath)
+  PORT: "8080"
+
