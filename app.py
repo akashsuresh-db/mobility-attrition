@@ -244,7 +244,9 @@ def get_agent_response(conversation_history, user_token=None):
         
     except ValueError as e:
         # Authentication/configuration error
-        return f"Configuration Error: {str(e)}"
+        error_msg = f"Configuration Error: {str(e)}"
+        print(f"ERROR: {error_msg}")
+        return error_msg
     except AttributeError as e:
         # Response structure error
         return f"Response Format Error: {str(e)}. The agent response format may have changed."
@@ -684,6 +686,12 @@ def update_chat(send_clicks, clear_clicks, n_submit, user_message, conversation_
         user_email = request.headers.get('X-Forwarded-Email', 'unknown')
         print(f"Processing request for user: {user_email}")
         print(f"Using OBO token: {'Yes' if user_token else 'No (fallback to app token)'}")
+        
+        # Debug: Log token info (first/last 10 chars only for security)
+        if user_token:
+            print(f"Token prefix: {user_token[:10]}... (length: {len(user_token)})")
+        else:
+            print("No user token available from X-Forwarded-Access-Token header")
         
         # OBO is enabled - scopes configured in Databricks Apps settings:
         # - dashboards.genie
