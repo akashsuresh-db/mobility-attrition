@@ -83,16 +83,28 @@ def get_databricks_token():
     return None
 
 
-def get_client():
+def get_client(user_token=None):
     """
     Get or create OpenAI client with proper authentication.
     
-    For Databricks Apps: Automatically uses Service Principal credentials (no manual config needed!)
+    Args:
+        user_token: Optional user's access token from X-Forwarded-Access-Token header.
+                    If provided, uses user's token for OBO. If not, falls back to app token.
+    
+    For Databricks Apps with OBO: Pass user token from request headers
+    For Databricks Apps without OBO: Uses Service Principal credentials
     For local development: Uses DATABRICKS_TOKEN environment variable
     """
     global _cached_client
     
-    # Use cached client if available
+    # If user token provided, create a new client (don't cache - each user is different!)
+    if user_token:
+        return OpenAI(
+            api_key=user_token,
+            base_url=BASE_URL
+        )
+    
+    # Use cached client if available (for app token)
     if _cached_client is not None:
         return _cached_client
     
@@ -187,10 +199,17 @@ app.layout = dbc.Container([
 ], fluid=True, className="py-4")
 
 
-def get_agent_response(conversation_history):
-    """Get response from the Databricks agent endpoint"""
+def get_agent_response(conversation_history, user_token=None):
+    """
+    Get response from the Databricks agent endpoint.
+    
+    Args:
+        conversation_history: List of conversation messages
+        user_token: Optional user's access token for OBO. If provided, agent will
+                    execute queries on behalf of the user (RLS enforced).
+    """
     try:
-        client = get_client()
+        client = get_client(user_token=user_token)
         
         # Call the agent endpoint
         print(f"Calling agent with history: {len(conversation_history)} messages")
@@ -657,8 +676,17 @@ def update_chat(send_clicks, clear_clicks, n_submit, user_message, conversation_
             "content": user_message
         })
         
-        # Get agent response
-        agent_response = get_agent_response(conversation_history)
+        # Get user's token from request headers (for OBO authentication)
+        # This allows the agent to execute queries on behalf of the user
+        user_token = request.headers.get('X-Forwarded-Access-Token')
+        
+        # Get user's email for logging
+        user_email = request.headers.get('X-Forwarded-Email', 'unknown')
+        print(f"Processing request for user: {user_email}")
+        print(f"Using OBO token: {'Yes' if user_token else 'No (fallback to app token)'}")
+        
+        # Get agent response with user's token
+        agent_response = get_agent_response(conversation_history, user_token=user_token)
         
         # Add agent response to conversation history
         conversation_history.append({
