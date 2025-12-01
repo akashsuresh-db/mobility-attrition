@@ -22,8 +22,10 @@ server.wsgi_app = ProxyFix(server.wsgi_app, x_for=1, x_proto=1, x_host=1, x_pref
 MODEL_NAME = "agents_akash_s_demo-talent-talent_agent_v1"
 BASE_URL = "https://adb-984752964297111.11.azuredatabricks.net/serving-endpoints"
 
-# Cache client for local development (when using env var)
-_cached_client = None
+# IMPORTANT: DO NOT cache user tokens or clients!
+# Per internal doc: "Always forward the per-request user token; never cache or fall back"
+# Each request must use the fresh X-Forwarded-Access-Token header for OBO to work correctly.
+# Caching tokens across requests causes "Invalid scope" errors with stale tokens.
 
 
 def get_databricks_token():
@@ -791,32 +793,35 @@ def update_chat(send_clicks, clear_clicks, n_submit, user_message, conversation_
             "content": user_message
         })
         
-        # Get user's token from request headers (for OBO authentication)
-        # This allows the agent to execute queries on behalf of the user
+        # CRITICAL: Read user token from request headers PER REQUEST (never cache!)
+        # Per internal doc: "Always forward the per-request user token; never cache or fall back"
         user_token = request.headers.get('X-Forwarded-Access-Token')
         
         # Get user's email for logging
         user_email = request.headers.get('X-Forwarded-Email', 'unknown')
         print(f"Processing request for user: {user_email}")
-        print(f"Using OBO token: {'Yes' if user_token else 'No (fallback to app token)'}")
         
-        # Debug: Log token info (first/last 10 chars only for security)
-        if user_token:
-            print(f"Token prefix: {user_token[:10]}... (length: {len(user_token)})")
+        # CRITICAL: Validate token is present (per internal doc)
+        if not user_token:
+            print("❌ ERROR: No user token found in X-Forwarded-Access-Token header!")
+            agent_response = (
+                "⚠️ **Authentication Error**\n\n"
+                "No user access token was found in the request.\n\n"
+                "This typically means:\n"
+                "1. User authorization is not enabled for this app\n"
+                "2. You're accessing the app directly instead of through Databricks\n\n"
+                "Please access the app through the Databricks workspace."
+            )
         else:
-            print("No user token available from X-Forwarded-Access-Token header")
-        
-        # OBO is enabled - scopes configured in Databricks Apps settings:
-        # - dashboards.genie
-        # - serving.serving-endpoints (for calling agent endpoint)
-        # - sql, catalog.* (for data access)
-        use_obo = True  # ✅ Scopes added in app settings
-        
-        # Get agent response with user's token (enables RLS)
-        agent_response = get_agent_response(
-            conversation_history, 
-            user_token=user_token if use_obo else None
-        )
+            print(f"✓ User token found (length: {len(user_token)})")
+            print(f"Token prefix: {user_token[:10]}...")
+            
+            # Get agent response with fresh per-request user token (enables RLS)
+            # NEVER cache this token across requests!
+            agent_response = get_agent_response(
+                conversation_history, 
+                user_token=user_token  # Always use the per-request token
+            )
         
         # Add agent response to conversation history
         conversation_history.append({
