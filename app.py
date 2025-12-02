@@ -283,9 +283,6 @@ def get_agent_response(conversation_history, user_token=None):
         url = f"https://{host}/serving-endpoints/{MODEL_NAME}/invocations"
         
         # Call the agent endpoint with proper Authorization header
-        print(f"Calling agent at: {url}")
-        print(f"With {len(conversation_history)} messages in history")
-        
         headers = {
             "Authorization": f"Bearer {auth_token}",
             "Content-Type": "application/json"
@@ -307,8 +304,6 @@ def get_agent_response(conversation_history, user_token=None):
         
         # Parse JSON response
         response_json = response.json()
-        print(f"Response status: {response.status_code}")
-        print(f"Response JSON keys: {response_json.keys() if isinstance(response_json, dict) else 'Not a dict'}")
         
         # Extract text from Agent Framework response format
         response_parts = []
@@ -334,8 +329,6 @@ def get_agent_response(conversation_history, user_token=None):
             response_parts.append(str(response_json["response"]))
         
         response_text = "\n".join(response_parts)
-        print(f"Final response text length: {len(response_text)}")
-        print(f"Final response text preview: '{response_text[:200]}'")
         
         if not response_text.strip():
             return "⚠️ I received your message but got an empty response from the agent. This could mean:\n\n1. The agent endpoint is running but not processing queries correctly\n2. There might be an issue with the data sources or permissions\n3. The query might need to be rephrased\n\nPlease try rephrasing your question or check the agent endpoint logs."
@@ -423,16 +416,11 @@ def parse_markdown_table(text):
     pipe_pattern = patterns[0]
     matches = list(re.finditer(pipe_pattern, text, re.MULTILINE))
     
-    print(f"DEBUG parse_markdown_table - Found {len(matches)} potential pipe tables")
-    
     for match in matches:
         table_text = match.group(0)
-        print(f"DEBUG parse_markdown_table - Processing table text:\n{table_text[:200]}")
         try:
             lines = [line.strip() for line in table_text.strip().split('\n') if line.strip() and '|' in line]
-            print(f"DEBUG parse_markdown_table - Extracted {len(lines)} lines from table")
             if len(lines) < 2:
-                print(f"DEBUG parse_markdown_table - Skipping: too few lines")
                 continue
             
             # Find separator line (must contain dashes, not just spaces)
@@ -444,14 +432,11 @@ def parse_markdown_table(text):
                     cleaned = line.replace('|', '').replace('-', '').replace(':', '').replace(' ', '').replace('\t', '')
                     if not cleaned:
                         separator_idx = i
-                        print(f"DEBUG parse_markdown_table - Found separator at line {i}: {line}")
                         break
             
             if separator_idx is None:
-                print(f"DEBUG parse_markdown_table - Skipping: no separator found")
                 continue
             if separator_idx == 0:
-                print(f"DEBUG parse_markdown_table - Skipping: separator at index 0")
                 continue
             
             # Extract headers - strip empty leading/trailing cells
@@ -469,14 +454,11 @@ def parse_markdown_table(text):
                 continue
             
             num_cols = len(headers)
-            print(f"DEBUG parse_markdown_table - Parsed {num_cols} headers: {headers}")
             
             # Extract data rows - dynamically handle any number of columns
             data = []
-            print(f"DEBUG parse_markdown_table - Processing {len(lines) - separator_idx - 1} data rows")
             for row_idx, line in enumerate(lines[separator_idx + 1:]):
                 raw_cells = [cell.strip() for cell in line.split('|')]
-                print(f"DEBUG parse_markdown_table - Row {row_idx}: raw_cells = {raw_cells}")
                 
                 # Remove empty cells from start and end
                 while raw_cells and raw_cells[0] == '':
@@ -484,10 +466,7 @@ def parse_markdown_table(text):
                 while raw_cells and raw_cells[-1] == '':
                     raw_cells.pop()
                 
-                print(f"DEBUG parse_markdown_table - Row {row_idx}: after cleanup = {raw_cells} (len={len(raw_cells)} vs headers={num_cols})")
-                
                 if not raw_cells:
-                    print(f"DEBUG parse_markdown_table - Row {row_idx}: skipping empty row")
                     continue
                 
                 # Smart column extraction:
@@ -497,19 +476,15 @@ def parse_markdown_table(text):
                     if raw_cells[0].isdigit():
                         # Skip the index, take the rest
                         cells = raw_cells[1:num_cols+1]
-                        print(f"DEBUG parse_markdown_table - Row {row_idx}: detected pandas index, cells = {cells}")
                     else:
                         # Take first N columns
                         cells = raw_cells[:num_cols]
-                        print(f"DEBUG parse_markdown_table - Row {row_idx}: taking first {num_cols} cells = {cells}")
                 elif len(raw_cells) == num_cols:
                     # Perfect match
                     cells = raw_cells
-                    print(f"DEBUG parse_markdown_table - Row {row_idx}: perfect match, cells = {cells}")
                 else:
                     # Fewer cells than headers - pad with empty strings
                     cells = raw_cells + [''] * (num_cols - len(raw_cells))
-                    print(f"DEBUG parse_markdown_table - Row {row_idx}: padded cells = {cells}")
                 
                 # Ensure we have exactly the right number of columns
                 cells = cells[:num_cols]
@@ -519,19 +494,10 @@ def parse_markdown_table(text):
                 # Skip rows with all empty values
                 if cells and any(c for c in cells):
                     data.append(cells)
-                    print(f"DEBUG parse_markdown_table - Row {row_idx}: ✅ added to data")
-                else:
-                    print(f"DEBUG parse_markdown_table - Row {row_idx}: ❌ skipped (all empty)")
             
-            print(f"DEBUG parse_markdown_table - Extracted {len(data)} data rows")
             if data:
                 df = pd.DataFrame(data, columns=headers)
-                print(f"DEBUG parse_markdown_table - ✅ Successfully parsed table with {len(df)} rows and {len(df.columns)} columns")
-                print(f"DEBUG parse_markdown_table - Columns: {df.columns.tolist()}")
-                print(f"DEBUG parse_markdown_table - Sample rows: {data[:2]}")
                 tables.append((df, match.start(), match.end()))
-            else:
-                print(f"DEBUG parse_markdown_table - ❌ No data rows extracted from table")
                 
         except Exception as e:
             print(f"Error parsing pipe table: {e}")
@@ -592,12 +558,6 @@ def format_response_content(content):
     # Parse tables from the content (BEFORE normalizing whitespace to preserve table structure)
     tables, summary_text = parse_markdown_table(content_clean)
     
-    # Debug logging
-    print(f"DEBUG format_response - Found {len(tables)} tables")
-    print(f"DEBUG format_response - Summary text length: {len(summary_text)}")
-    print(f"DEBUG format_response - Summary text: '{summary_text}'")
-    print(f"DEBUG format_response - Content clean preview: {content_clean[:300]}")
-    
     # Now normalize whitespace in the summary text only (not the whole content with tables)
     summary_text = re.sub(r'[ \t]+', ' ', summary_text).strip()  # Normalize spaces/tabs but keep newlines
     
@@ -623,30 +583,21 @@ def format_response_content(content):
     if summary_text:
         # Split by newlines and create paragraphs
         paragraphs = [p.strip() for p in summary_text.split('\n') if p.strip() and len(p.strip()) > 3]
-        print(f"DEBUG format_response - Found {len(paragraphs)} paragraphs in summary")
         if paragraphs:
             for idx, para in enumerate(paragraphs):
-                print(f"DEBUG format_response - Paragraph {idx}: {para[:100]}")
                 # Skip if it looks like table remnants
                 if not re.match(r'^[-:\s|]+$', para) and '|' not in para[:10]:
                     components.append(html.P(para, className="mb-2"))
-                    print(f"DEBUG format_response - ✅ Added paragraph {idx}")
-                else:
-                    print(f"DEBUG format_response - ❌ Skipped paragraph {idx} (table remnant)")
     
-    # Add tables - only show the LAST table (from supervisor_summarizer, not duplicates from genie)
+    # Add tables - show the table with the most rows (most complete data)
     if tables:
-        print(f"DEBUG format_response - Processing {len(tables)} tables for display")
-        
-        # Only use the last table if we have duplicates
-        tables_to_display = [tables[-1]] if len(tables) > 1 else tables
-        print(f"DEBUG format_response - Displaying {len(tables_to_display)} table(s) (last one only)")
+        # Find the table with the most rows (most complete data)
+        table_with_most_rows = max(tables, key=lambda t: len(t[0]))
+        tables_to_display = [table_with_most_rows]
         
         for table_idx, (df, _, _) in enumerate(tables_to_display):
-            print(f"DEBUG format_response - Table {table_idx}: {len(df)} rows, {len(df.columns)} cols")
             # Skip tables with no meaningful data
             if df.empty or len(df) == 0:
-                print(f"DEBUG format_response - ❌ Skipping table {table_idx}: empty")
                 continue
             
             # Check if table has any non-empty values
@@ -657,10 +608,8 @@ def format_response_content(content):
                     break
             
             if not has_data:
-                print(f"DEBUG format_response - ❌ Skipping table {table_idx}: no data")
                 continue
             
-            print(f"DEBUG format_response - ✅ Adding table {table_idx} to display")
             # Create a styled table
             table_header = html.Thead(
                 html.Tr([
